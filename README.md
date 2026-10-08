@@ -1,0 +1,246 @@
+# agda-bridge
+
+A language server for [Agda](https://agda.readthedocs.io/en/latest/getting-started/what-is-agda.html)
+that drives Agda through its own `--interaction-json` protocol, as Emacs's
+`agda2-mode` does, instead of through the
+[Agda Language Server](https://github.com/agda/agda-language-server). It was
+written for [Zed](https://zed.dev), which starts it through the
+[zed-agda](https://github.com/timjs/zed-agda) extension. Credits to:
+
+- Interaction protocol: [agda2-vscode](https://github.com/willtunnels/agda2-vscode) (MIT), whose protocol handling the bridge ports to Rust and whose dump of Agda's input method it uses for Unicode input; see [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)
+- Typst symbol names: [codex](https://github.com/typst/codex) (Apache-2.0)
+
+## Installation
+
+You need Agda itself, and Rust to build the bridge:
+
+```sh
+cargo install --locked --git https://github.com/timjs/agda-bridge
+```
+
+This puts `agda-bridge` in `~/.cargo/bin`, which must be on your `PATH`. Then
+install the [zed-agda](https://github.com/timjs/zed-agda) extension in Zed:
+clone it, and choose "Install Dev Extension" on the Extensions page.
+
+## Configuration
+
+The extension looks for `agda-bridge` on your `PATH`, and the bridge looks for
+`agda` on your `PATH`. Both, and the bridge's other settings, are set in Zed's
+`settings.json`, under `lsp.agda-bridge`: `binary` for the bridge itself and
+`settings` for everything else.
+
+```json
+"lsp": {
+  "agda-bridge": {
+    "binary": { "path": "/path/to/agda-bridge" },
+    "settings": {
+      "agdaPath": "/path/to/agda",
+      "outputFile": ".zed/agda-output.md",
+      "symbolInput": "both",
+      "symbolTrailingSpace": true,
+      "symbolOnlyAfterWhitespace": false
+    }
+  }
+}
+```
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `agdaPath` | `"agda"` | the Agda program |
+| `extraArgs` | `[]` | extra command line arguments for Agda, such as `["--safe"]` |
+| `outputFile` | `".zed/agda-output.md"` | where Agda's answers appear, relative to the project root (see below) |
+| `symbolInput` | `"both"` | how symbols are typed: `"latex"` (`\to`), `"typst"` (`#arrow.r`), `"both"` or `"none"` (see [Unicode input](#unicode-input)) |
+| `symbolTrailingSpace` | `true` | put a space after a completed symbol, unless one is already there |
+| `symbolOnlyAfterWhitespace` | `false` | let `\` and `#` start a symbol only at the start of a line or after whitespace, so that `{-#` and `x\y` never open the menu |
+
+Changes apply at once, without restarting anything: a new `agdaPath` or
+`extraArgs` restarts Agda at the next load, a new `outputFile` is used for the
+next answer. A wrong value is reported and its default used instead.
+
+Zed decides what may go under `lsp.agda-bridge` (`binary`, `settings` and a
+few more), so the settings cannot sit directly under `agda-bridge`; `settings`
+is Zed's place for a language server's own settings.
+
+`outputFile` is the Markdown file where Agda's answers appear (the equivalent
+of Emacs's `*Agda information*` buffer), relative to the project root. Add it
+to your `.gitignore`. It opens once by itself, in the pane you are editing;
+move it to a split. After closing it, reopen it with the code action `Open
+output file` on a goal or an error, or with Zed's `pane: reopen closed item`
+(`cmd-shift-t` on macOS, `ctrl-shift-t` on Linux). With
+`"reveal_if_open": true` in Zed's settings, the code action and the automatic
+opening reveal an output file that is already open in another pane, instead of
+opening a second copy.
+
+Agda's own highlighting, including backgrounds for unsolved metas and
+termination or coverage problems, arrives as semantic tokens. Whether Zed uses
+them is Zed's own setting, `semantic_tokens`, which is `"off"` by default for
+every language; an extension cannot change that default, so switch it on for
+Agda yourself (and set it to `"off"` again to switch Agda's highlighting off):
+
+```json
+"languages": {
+  "Agda": { "semantic_tokens": "combined" }
+}
+```
+
+`combined` keeps the tree-sitter highlighting underneath, for text Agda has not
+seen yet (lines typed since the last save); `full` shows only Agda's.
+
+## Goals
+
+Opening or saving a file loads it in Agda. Goals then show their types as
+diagnostics, and a lone `?` becomes `{!  !}`. Hover shows a goal's type and
+context, and, when the goal has text, the type of that text (`Have:`, as
+Emacs's `C-c C-.`) or why Agda cannot type it. Elsewhere, on a name that is
+in scope at the top level, in the file Agda loaded last, it shows the name's
+type (as `suc : ℕ → ℕ`), how to type it when it is a symbol, and why it is
+in scope: its definition, or the `open` that brought it in, with locations.
+Agda's answers are kept until the next load, so hovering again is instant.
+When Agda is busy for more than a second, as during a load, hover shows what
+it has and says what follows. The code actions (`cmd-.` on macOS, `ctrl-.`
+on Linux) are:
+
+| Where | Code action | Effect |
+| --- | --- | --- |
+| a type signature | `Make clause` | adds a clause below it, with a name for each argument from its type: `n + m = {!  !}` for `_+_ : ℕ → ℕ → ℕ` (as Idris's "add clause") |
+| a goal | `Give`, `Refine` | give or refine the goal with its text |
+| an empty goal | ``Case split on `n` `` | one for each variable of the goal's context that can be split |
+| an empty goal | `Case split on result` | introduce the missing patterns, or split on the result |
+| a goal with text | ``Case split on `x y` `` | split on the variables typed in the goal |
+| a goal that is a whole right-hand side | `With-abstract`, ``With-abstract on `e` `` | `f n = {! e !}` becomes `f n with e` and `... \| w = {!  !}` (as Idris's "add with") |
+| a goal whose text calls a new name | ``Make helper function `aux` `` | `{! aux n m !}` becomes `aux n m`, in parentheses where needed, and `aux : (n m : ℕ) → ℕ` with the clause `aux n m = {!  !}` goes above the definition (the type from Agda, as Emacs's `C-c C-h`; the rest as Idris's "make lemma") |
+| a goal | `Auto`, `Solve`, `Solve all goals` | proof search, or the solutions unification already found |
+| a goal with text | `Print normal form in output` | the normal form of the text, as Emacs's `C-c C-n` |
+| a goal or an error | `Print goal in output`, `Open output file` | the output file |
+
+New clauses, from `Make clause`, a case split, `With-abstract` or a helper
+function, are loaded when you save the file; until then their goals have no
+number. Save between two helper functions too: until Agda loads the file
+again, Agda 2.8 gives the second one the names of the first, so the bridge
+waits for it.
+
+A load, a normal form, or auto with a longer time limit in the goal's text
+(as `{! -t 10000 !}`), can take long. Zed then shows it in the status bar, as
+"Agda: checking A.agda" or "Agda: normal form of ?0"; to stop it, click it
+there and choose "Cancel", or run `editor: cancel language server work`.
+After a stopped load, Agda has no file loaded: goals and diagnostics stay
+those of the last load, and saving loads the file again.
+
+### Moving between goals
+
+Goals are diagnostics of the severity "information" (errors and warnings
+have their own), so Zed's diagnostic jumps can move between goals only. In
+vim or Helix mode, `[ g` and `] g` are free for that; add this to your keymap
+(`zed: open keymap file`):
+
+```json
+[
+  {
+    "context": "Editor && extension == agda && (vim_mode == normal || vim_mode == helix_normal)",
+    "bindings": {
+      "] g": ["editor::GoToDiagnostic", { "severity": "information" }],
+      "[ g": ["editor::GoToPreviousDiagnostic", { "severity": "information" }]
+    }
+  }
+]
+```
+
+Without vim or Helix mode, drop the `vim_mode` part of the context and pick
+other keys.
+
+## Renaming
+
+Renaming is not a code action: Zed only lets a language server answer its own
+Rename Symbol, which asks for the new name. Start it with `F2`, `space r` in
+Helix mode, `g r n` in vim mode, or Rename Symbol in the menu of a right
+click. Every place where Agda found that name changes, in all Agda files open
+in Zed. Renaming one part of an operator renames the operator (`⊕` on the `+`
+of `n + m` makes `_+_` into `_⊕_`). It works on what Agda checked at the last
+save, so save first; text in goals, which Agda does not check, and files that
+are not open stay as they are. Afterwards a message lists the files that are
+not open but import the module and may use the name.
+
+## Saving
+
+**Auto save is not possible from the extension:** the language server
+protocol has no way for a server to save a file, so the files a rename or a
+code action changed stay unsaved, and Agda only checks them when you save.
+Workarounds:
+
+- Save all files at once with `workspace: save all` (`cmd-alt-s` on macOS,
+  `ctrl-alt-s` on Linux).
+- Let Zed save by itself with its `autosave` setting, for this project only in
+  its `.zed/settings.json`:
+
+  ```json
+  { "autosave": "on_focus_change" }
+  ```
+
+  Every save loads the file in Agda again, so a short delay
+  (`{ "autosave": { "after_delay": { "milliseconds": 1000 } } }`) also checks
+  while you type.
+
+## Unicode input
+
+Type a leader and a name, and pick the symbol from the completion menu with
+`tab` or `enter`:
+
+| You type | You get | Notation |
+| --- | --- | --- |
+| `\to`, `\all`, `\bN`, `\Gl`, `\'e` | `→ ∀ ℕ λ é` | the abbreviations of Agda's Emacs mode, which include LaTeX's names |
+| `#arrow.r`, `#forall`, `#NN`, `#alpha` | `→ ∀ ℕ α` | the names of [Typst's symbols](https://typst.app/docs/reference/symbols/sym/), with modifiers in any order |
+| `#->`, `#=>`, `#<=`, `#!=`, `#[\|` | `→ ⇒ ≤ ≠ ⟦` | Typst's [math shorthands](https://typst.app/docs/reference/symbols/#shorthands) |
+| `#acute(e)`, `#diaer(o)`, `#hat(alpha)` | `é ö α̂` | Typst's [accents](https://typst.app/docs/reference/math/accent/), also nested, as in `#macron(diaer(u))` for `ǖ` |
+
+To find out how to type a symbol you see, hover over it (outside a goal):
+hovering `→` says it is typed with `\to`, `\->` and more, or `#arrow.r` and
+`#->`.
+
+The options `symbolInput`, `symbolTrailingSpace` and `symbolOnlyAfterWhitespace`
+above choose the notations, a space after the symbol, and whether a leader
+also counts in the middle of a word. By default `\` and `#` count anywhere, so
+the `#` of a pragma such as `{-# OPTIONS --safe #-}` also opens the menu; the
+next character, a space or `-`, closes it again.
+
+## Debugging
+
+For debugging, `agda-bridge client` sends a command to the running bridge from
+a terminal; run it without arguments for its usage.
+
+## Development
+
+The bridge was built in phases, from 1 to 8 October 2026, and each phase has
+notes on what was built, how it was checked, and what was decided:
+
+- [`docs/PLAN.md`](docs/PLAN.md): the design. It compares the Agda Language
+  Server with Agda's own interaction protocol, assesses what Zed allows, and
+  sets out the roadmap.
+- [`docs/PHASE0.md`](docs/PHASE0.md): the spike, which proved the risky
+  parts, such as diagnostics on load, hover on goals, give and refine, goals
+  that follow unsaved typing, the output file, and the debug client.
+- [`docs/PHASE1.md`](docs/PHASE1.md): go to definition, Agda's own
+  highlighting, Unicode input, and the goal commands.
+- [`docs/PHASE2.md`](docs/PHASE2.md): polish after using it, with settings,
+  renaming, clauses, with-abstraction, the outline, hover with types and
+  scope, normal forms, and helper functions.
+- [`docs/PHASE3.md`](docs/PHASE3.md): optimisations, such as a goal cache,
+  hover while Agda is busy, and stopping long commands and loads, with the
+  possible next steps.
+
+`cargo test` runs the unit tests and the end-to-end tests in
+[`tests/lsp.rs`](tests/lsp.rs). The end-to-end tests play Zed's role against
+the real `agda-bridge` and a real Agda, taken from `$AGDA` or from `agda` on
+your `PATH`; without Agda, the tests that need it are skipped. They work on
+copies of the files in [`tests/fixtures/`](tests/fixtures/) and expect them as
+committed, so run them on a clean working copy. One of them also talks to the
+bridge through the debug client's Unix socket.
+
+[`zed/semantic_token_rules.json`](zed/semantic_token_rules.json) styles the
+bridge's semantic tokens in Zed. A unit test checks it against the bridge's
+token types and modifiers; zed-agda has an identical copy in
+`languages/agda/semantic_token_rules.json`, so change both.
+
+The bridge started in the `bridge/` directory of zed-agda and moved to this
+repository, with its history, on 8 October 2026. It was written together with
+Claude Code (Claude Opus 5.5), as the `Co-Authored-By` lines of the commits
+show.
