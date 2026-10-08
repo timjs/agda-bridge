@@ -4,12 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Language server that bridges Zed (LSP) and Agda's --interaction-json protocol"
 license = "Apache-2.0"
+repository = "https://github.com/timjs/agda-bridge"
 publish = false
-
-# The bridge is a native program and must not be part of the extension's
-# workspace: Zed compiles the extension crate to wasm32-wasip2, where tokio's
-# process and socket support do not build.
-[workspace]
 
 [dependencies]
 codex = { version = "0.3.0", default-features = false }

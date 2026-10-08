@@ -1,0 +1,4 @@
+/target
+*.agdai
+_build/
+/.zed/agda-output.md

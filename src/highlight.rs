@@ -3,7 +3,7 @@
 //! While loading, Agda sends highlighting entries whose `atoms` say what a
 //! stretch of text is. The bridge maps each atom to either a token type (a
 //! kind of name, a keyword, a comment) or a modifier (a problem or a hole,
-//! which `languages/agda/semantic_token_rules.json` shows as a background).
+//! which `zed/semantic_token_rules.json` shows as a background).
 //!
 //! Zed draws all tokens of one server as a single highlight layer, so where
 //! two tokens overlap the inner one would cancel the outer one (`custom_highlights.rs`
@@ -349,7 +349,7 @@ mod tests {
     fn rules_file_names_only_types_and_modifiers_of_the_legend() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../languages/agda/semantic_token_rules.json"
+            "/zed/semantic_token_rules.json"
         );
         let text: String = std::fs::read_to_string(path)
             .unwrap()
