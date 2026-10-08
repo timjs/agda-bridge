@@ -116,7 +116,7 @@ with the space before it, at the end of the first new clause.
 
 Agda's interaction protocol has no rename command, so the bridge builds one on
 the definition sites it already keeps for go to definition
-(`bridge/src/rename.rs`):
+(`src/rename.rs`):
 
 1. **What changes.** Every place in the open Agda files whose link leads to
    the same definition site, and the definition itself. Agda's highlighting
@@ -162,12 +162,12 @@ cannot sit directly under `lsp.agda-bridge`: Zed's `LspSettings`
 extension API hands an extension only the first three. `settings` is Zed's
 field for a server's own settings, so they moved there.
 
-1. **The extension** (`src/lib.rs`) passes `settings` both as
+1. **The extension** (zed-agda's `src/lib.rs`) passes `settings` both as
    initialization options, so Agda starts with the right program, and as the
    workspace
    configuration, which Zed sends with `workspace/didChangeConfiguration`
    after the start and after every change (`crates/project/src/lsp_store.rs`).
-2. **The bridge** (`bridge/src/settings.rs`) reads them with the same checks
+2. **The bridge** (`src/settings.rs`) reads them with the same checks
    for every kind of value, and applies a change at once: a new `agdaPath` or
    `extraArgs` stops Agda, which starts again at the next load (and every
    file loads again, as Agda's flags may have changed); a new `outputFile` is
@@ -189,7 +189,7 @@ field for a server's own settings, so they moved there.
 
 ### A note on the test fixtures
 
-`bridge/tests/fixtures/Spike.agda` in the working copy had been edited in
+`tests/fixtures/Spike.agda` in the working copy had been edited in
 Zed (renaming `suc`, a case split), which made three end-to-end tests wait
 for goals that were no longer there. The tests ran against the committed
 fixtures instead, in a separate worktree; the edited file was left as it was.
@@ -253,7 +253,7 @@ file is saved.
 ## Fixed: the outline
 
 The outline (and the breadcrumbs) come from tree-sitter, through
-`languages/agda/outline.scm`, which came with the original extension. Three
+zed-agda's `languages/agda/outline.scm`, which came with the original extension. Three
 things were wrong in it:
 
 1. **`ℕ Set` under `ℕ`.** There were two patterns for `data` (and for
@@ -274,7 +274,7 @@ things were wrong in it:
    `data` without a type missed it when parameters came between).
 
 Checked with a small program that runs the query with the grammar of
-`extension.toml` (tree-sitter-agda `e8d47a6`) and nests the items the way Zed
+zed-agda's `extension.toml` (tree-sitter-agda `e8d47a6`) and nests the items the way Zed
 does: it reproduced the wrong outline first, then gave the right one for all
 fixtures and a file with every kind of declaration.
 
@@ -290,7 +290,7 @@ That is tree-sitter-agda's, not the query's.
 A code action on the first line of a type signature, after Idris's "add
 clause": `_+_ : ℕ → ℕ → ℕ` gets `n + m = {!  !}` right below the signature.
 Agda has no command for it, so the bridge reads the signature's text
-(`bridge/src/clause.rs`):
+(`src/clause.rs`):
 
 1. **Which lines.** `names : type` at the cursor, with the type going on over
    more indented lines, but not in a block of constructors, fields,

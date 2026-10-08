@@ -1,5 +1,11 @@
 # Plan: interactive Agda in Zed without the Agda Language Server
 
+> This plan was written in the zed-agda extension, where the bridge lived
+> in `bridge/` until 8 October 2026, when it moved to this repository with
+> its history. "This repository" below means zed-agda, and so do the paths
+> of the extension's files, such as `src/lib.rs`, `extension.toml` and
+> `languages/agda/`.
+
 This document investigates how to turn this repository into a Zed extension for
 interactive Agda development, comparable to Emacs `agda2-mode` and to
 [agda2-vscode](https://github.com/willtunnels/agda2-vscode), without using the

@@ -15,7 +15,7 @@ leaders, and prompts in the terminal. This phase replaces it:
 
 - The route through tasks was dropped after phase 0 ([`PHASE0.md`](PHASE0.md),
   "Decisions after phase 0"), because the language server can do the same
-  with code actions, without a terminal. `languages/agda/tasks.json` and its
+  with code actions, without a terminal. zed-agda's `languages/agda/tasks.json` and its
   keymap are gone.
 - `agda-bridge client` and its socket stay, as a tool for debugging.
 - What the tasks were for, Agda's commands with a typed expression, comes back

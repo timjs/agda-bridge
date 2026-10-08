@@ -14,7 +14,7 @@ in the same file, in another file of the project, or in a library.
 While loading a file, Agda sends highlighting information for every name:
 its range and, for most names, the site of its definition (a file and an
 offset). The bridge used to skip these messages; it now keeps the definition
-sites as links (`bridge/src/links.rs`) and answers `textDocument/definition`
+sites as links (`src/links.rs`) and answers `textDocument/definition`
 from them.
 
 Three details matter, all checked against Agda 2.8.0's real output:
@@ -65,9 +65,10 @@ announce `linkSupport` still get a plain location.
 
 The same highlighting messages say, through their `atoms`, what each stretch
 of text is. The bridge sends them to Zed as semantic tokens
-(`bridge/src/highlight.rs`): kinds of names, keywords and comments become
+(`src/highlight.rs`): kinds of names, keywords and comments become
 token types, and problems become modifiers that
-`languages/agda/semantic_token_rules.json` shows as background colours, as in
+`zed/semantic_token_rules.json` (in the extension
+`languages/agda/semantic_token_rules.json`) shows as background colours, as in
 Agda's Emacs mode (unsolved metas yellow, termination problems salmon,
 coverage problems wheat, holes light blue, and so on).
 
@@ -110,7 +111,7 @@ README).
 
 1. Rebuild the dev extension (the rules file is part of it), reinstall the
    bridge, and switch semantic tokens on.
-2. Open `bridge/tests/fixtures/Problems.agda` (a copy): `loop` should have a
+2. Open `tests/fixtures/Problems.agda` (a copy): `loop` should have a
    salmon background, the clause `partial zero` a wheat one.
 3. Compare the colours with tree-sitter's, in a light and a dark theme.
 
@@ -141,11 +142,11 @@ Typst symbol, then pick the symbol from the completion menu with `tab` or
 ### How it works
 
 A Zed extension cannot add an input method or keybindings, so the bridge
-offers the symbols as completions (`bridge/src/input.rs`).
+offers the symbols as completions (`src/input.rs`).
 
 1. **Two sources.** The abbreviations are agda2-vscode's dump of Agda's own
    input method (`agda-input.el`, which includes the TeX input method of
-   Emacs), copied unchanged into `bridge/src/abbreviations.json`. The Typst
+   Emacs), copied unchanged into `src/abbreviations.json`. The Typst
    names come from the `codex` crate, the symbol table of Typst itself, in
    which modifiers may come in any order (`#arrow.long.r` is `#arrow.r.long`).
 2. **The bridge finds the leader itself.** Looking back from the cursor, `\`

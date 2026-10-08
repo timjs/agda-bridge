@@ -9,17 +9,17 @@ checks that only a person running Zed can do, and their results.
 
 | Part | Files | Purpose |
 | --- | --- | --- |
-| The bridge | `bridge/` (separate crate, about 2,200 lines including unit tests) | Language server for Zed, driving `agda --interaction-json` |
-| Protocol | `bridge/src/iotcm.rs`, `protocol.rs`, `agda.rs` | Commands, responses, the Agda process |
-| Positions and goals | `bridge/src/text.rs`, `goals.rs`, `location.rs` | Code points, UTF-16 and UTF-8 columns; goals that follow edits |
-| LSP | `bridge/src/server.rs`, `render.rs`, `output.rs` | Load, diagnostics, hover, code actions, give and refine, output file |
-| Debug client | `bridge/src/socket.rs` | `agda-bridge client …` sends a command to a running bridge from a terminal |
-| Extension | `src/lib.rs`, `extension.toml`, `Cargo.toml` | Starts `agda-bridge` instead of the Agda Language Server |
-| Tests | `bridge/src/*.rs` (21 unit tests), `bridge/tests/lsp.rs` | The end-to-end test plays Zed's role against a real Agda |
+| The bridge | this repository (then `bridge/` in zed-agda, a separate crate, about 2,200 lines including unit tests) | Language server for Zed, driving `agda --interaction-json` |
+| Protocol | `src/iotcm.rs`, `protocol.rs`, `agda.rs` | Commands, responses, the Agda process |
+| Positions and goals | `src/text.rs`, `goals.rs`, `location.rs` | Code points, UTF-16 and UTF-8 columns; goals that follow edits |
+| LSP | `src/server.rs`, `render.rs`, `output.rs` | Load, diagnostics, hover, code actions, give and refine, output file |
+| Debug client | `src/socket.rs` | `agda-bridge client …` sends a command to a running bridge from a terminal |
+| Extension | zed-agda's `src/lib.rs`, `extension.toml`, `Cargo.toml` | Starts `agda-bridge` instead of the Agda Language Server |
+| Tests | `src/*.rs` (21 unit tests), `tests/lsp.rs` | The end-to-end test plays Zed's role against a real Agda |
 
 ## What is now proven
 
-The end-to-end test (`bridge/tests/lsp.rs`) acts as an LSP client, the way
+The end-to-end test (`tests/lsp.rs`) acts as an LSP client, the way
 Zed does, and runs the real bridge against **Agda 2.8.0** (the official Linux
 release binary). Every row below is an assertion in that test.
 
@@ -69,7 +69,7 @@ hover.
    background tasks, so it never blocks the server's request slots.
 6. **The repository's `.gitignore` ignores `*.agda`**, which would have
    silently left the test files out of git. An exception for
-   `bridge/tests/fixtures/` was added.
+   `tests/fixtures/` was added.
 7. **Zed sends `didSave` for every saved file to every language server of the
    worktree**, whatever the file's language (`on_buffer_saved` in
    `crates/project/src/lsp_store.rs`). Saving a Markdown file therefore made
@@ -94,11 +94,11 @@ These need Zed's user interface, so they could not be automated here.
 
 ### Setup
 
-1. Install the bridge (it needs Rust): `cargo install --path bridge` from this
+1. Install the bridge (it needs Rust): `cargo install --path .` from this
    repository. This puts `agda-bridge` in `~/.cargo/bin`, which must be on your
    `PATH`.
 2. In Zed, open the Extensions page, choose "Install Dev Extension" and select
-   this repository. If the published Agda extension is installed, Zed marks it
+   the zed-agda repository. If the published Agda extension is installed, Zed marks it
    as overridden by the dev extension.
 3. If `agda` is not on your `PATH`, tell the bridge where it is in Zed's
    `settings.json`:
@@ -149,7 +149,7 @@ startup.
 
 ### Results in Zed
 
-Run on macOS on 2 October 2026, with `bridge/tests/fixtures/Spike.agda`.
+Run on macOS on 2 October 2026, with `tests/fixtures/Spike.agda`.
 Code actions were opened with `space a` (a vim mode binding).
 
 | # | Check | Result |
@@ -173,7 +173,7 @@ by the end-to-end test.
 ### Decisions after phase 0
 
 - **The LSP path comes first.** The Emacs-style route through Zed tasks is
-  dropped: `languages/agda/tasks.json` is removed, and so is its keymap. The
+  dropped: zed-agda's `languages/agda/tasks.json` is removed, and so is its keymap. The
   `agda-bridge client` subcommand stays, as a debugging tool.
 - **Priorities for phase 1**, in addition to the plan: go to definition
   (`cmd`-click on a name), and Unicode input in two styles, `\` followed by a
