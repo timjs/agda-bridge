@@ -227,6 +227,9 @@ notes on what was built, how it was checked, and what was decided:
   hover while Agda is busy, and stopping long commands and loads, with the
   possible next steps.
 
+Plans beyond the phases are in [`docs/EXTENSIONS.md`](docs/EXTENSIONS.md),
+starting with literate Agda in Typst (`.lagda.typ`).
+
 `cargo test` runs the unit tests and the end-to-end tests in
 [`tests/lsp.rs`](tests/lsp.rs). The end-to-end tests play Zed's role against
 the real `agda-bridge` and a real Agda, taken from `$AGDA` or from `agda` on
