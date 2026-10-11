@@ -202,6 +202,15 @@ also counts in the middle of a word. By default `\` and `#` count anywhere, so
 the `#` of a pragma such as `{-# OPTIONS --safe #-}` also opens the menu; the
 next character, a space or `-`, closes it again.
 
+## Literate Agda
+
+Agda checks literate files, such as `.lagda.md` and `.lagda.typ`, itself, so
+loading, goals, hover and the goal commands work in them as in `.agda` files.
+For `.lagda.md` and `.lagda.typ`, the bridge also knows which parts are code,
+by Agda's own rules: "Make clause", helper functions and symbol completion
+never touch the prose. The zed-agda extension highlights `.lagda.typ` files as
+Typst, with the Agda blocks as Agda; see its README.
+
 ## Debugging
 
 For debugging, `agda-bridge client` sends a command to the running bridge from

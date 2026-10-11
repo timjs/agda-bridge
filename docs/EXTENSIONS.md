@@ -231,11 +231,16 @@ Wrong in literate files are the features that read lines themselves:
   function there.
 - `src/clause.rs` (`signature_at`) reads a signature over several lines, and
   can run into a fence or prose at the edge of a block.
-- `src/goals.rs` (`case_split`, `add_with`) reads the goal's line and its
-  neighbours; the risk there is smaller.
+- `src/goals.rs` (`case_split`, `add_with`) reads the goal's line. Step 2
+  found that this is no problem: Agda only puts goals in code, and these
+  functions read nothing but the goal's own line.
 - `src/input.rs` completes `\` and `#` anywhere. Zed's scope filter keeps this
   out of the prose in the new language, but not in the fallback of section 7,
   and not in other editors.
+- Found in step 2: the files that a rename lists as possibly using the name,
+  because they import its module, were found by the module's name taken from
+  `file_stem()`, which is `Nat.lagda` for `Nat.lagda.typ`, so imports of a
+  literate module were never found. That scan also read the prose.
 
 Agda itself solves this by turning the prose into spaces before it parses. The
 bridge can do the same.
@@ -306,28 +311,49 @@ To check in Zed, with the dev extension:
 - A `.lagda.typ` module and an `.agda` module can import each other, through
   the one bridge.
 
-### Step 2, the bridge: literate files
+### Step 2, the bridge: literate files (done)
+
+Built on branch `literate-typst`:
 
 - A new module, `src/literate.rs`, ports Agda's `literateMd` for `.lagda.md`
-  and `.lagda.typ`: it returns the text with every character outside code
-  replaced by a space, keeping the line breaks, so every offset stays the same.
-  Fences and prose become blank lines, so scanning upward goes from a block
-  into the block before it, as Agda reads them.
-- `clause.rs`, `helper.rs`, `goals.rs` (`case_split`, `add_with`) and
-  `input.rs` read that text instead of the document; `input.rs` then offers no
-  symbols outside code.
-- Decide whether fences keep the `comment` token, which `markup` gets in
+  and `.lagda.typ`. Its `code` returns the text with every character outside
+  code replaced by a space, as Agda's `bleach` does, keeping line breaks, so
+  every offset stays the same. Fences and prose become blank lines, so
+  scanning upward goes from a block into the block before it, as Agda reads
+  them. Agda's regular expressions are ported as plain string tests; their
+  `[[:space:]]` is regex-tdfa's `"\t\n\v\f\r "`, which is not Rust's
+  `is_ascii_whitespace`, since that leaves out `\v`. Other files, `.agda` and
+  the literate formats not ported yet, are returned as they are.
+- `src/server.rs` reads that text for "Make clause" (the code action and the
+  command), for placing a helper function, and for symbol completion, which so
+  offers nothing outside code. `case_split` and `add_with` keep reading the
+  document, see section 5.
+- A new `module_name` strips the whole extension, `Nat` for `Nat.lagda.typ`,
+  and is used both by `is_agda_source` and by the rename's search for files
+  that import the module, which now also reads only their code.
+- Decided: fences keep the `comment` token that Agda's `markup` gets in
   `src/highlight.rs`.
 - The other formats, `.lagda.tex`, `.lagda.rst`, `.lagda.org` and
   `.lagda.tree`, can follow later by porting their rules from the same file of
   Agda.
-- Tests: a fixture `tests/fixtures/Literate.lagda.typ` with prose, an `agda`
-  block with a signature, a later block with its clause and a goal, a `haskell`
-  block and a bare block. End-to-end tests that a load gives the goals on the
-  right lines, that a helper function lands in code when the signature is in
-  an earlier block, that "Make clause" and a case split work in a block, and
-  that prose gets no symbol completions. Unit tests for `literate.rs` with the
-  cases of Agda's rules.
+
+Tests:
+
+- Unit tests in `src/literate.rs` for Agda's rules: `agda`, bare and other
+  blocks; a fence at the end of a line of prose, indented fences, `Agda` and
+  `` ``` agda `` as prose, `` ```agda `` inside a block, an unclosed block;
+  offsets and line breaks kept, also with `\r\n`, tabs and characters outside
+  the Basic Multilingual Plane; other files left alone.
+- A unit test in `src/server.rs` for `module_name`.
+- An end-to-end test, `works_in_literate_typst` in `tests/lsp.rs`, on the new
+  fixture `tests/fixtures/Literate.lagda.typ`, whose prose has a line that
+  reads like a signature of `double` and a `\to`. It checks that the goals are
+  on the right lines, that the `agda` fences are comments and the prose and
+  the `haskell` block have no tokens, that `\to` completes in code and not in
+  prose, that "Make clause" is offered on a signature in a block and not on the
+  prose, that the helper function goes above `double`'s signature in the block
+  before, that Agda accepts the result, and that a case split and "Make
+  clause" stay in their blocks.
 
 ### Step 3, optional: Tinymist for the prose
 
@@ -363,16 +389,18 @@ prose without any, since Agda gives it no tokens; `full` also applies to
 
 ---
 
-## 8. Open decisions
+## 8. Decisions
 
 1. **Bare blocks.** The request was for ```` ```agda ```` blocks only, but
-   Agda also checks bare blocks. Proposal: highlight them as Agda too, so the
-   editor shows what Agda checks.
-2. **The name.** "Literate Agda (Typst)" leaves room for "Literate Agda
-   (Markdown)" with Zed's built-in Markdown grammar. The name is typed in
-   settings.
-3. **Tinymist**, step 3: yes or no.
-4. **The branch.** Step 1 builds on zed-agda's `use-agda-bridge`, not `master`.
+   Agda also checks bare blocks. Taken in step 1: they are highlighted as Agda
+   too, so the editor shows what Agda checks.
+2. **The name.** Taken in step 1: "Literate Agda (Typst)", which leaves room
+   for "Literate Agda (Markdown)" with Zed's built-in Markdown grammar. The
+   name is typed in settings.
+3. **Tinymist**, step 3: yes or no. Still open.
+4. **The branch.** Step 1 is on zed-agda's branch `literate-typst`, from
+   `use-agda-bridge`; step 2 on this repository's branch `literate-typst`.
+5. **Fences.** Taken in step 2: they keep the `comment` token.
 
 ---
 
@@ -388,6 +416,10 @@ prose without any, since Agda gives it no tokens; `full` also applies to
 | The queries compile against the grammars | Typst extension 6 of 6, injections 1 of 1, changed highlights 1 of 1 (65 patterns, the original has 64), zed-agda's Agda queries 3 of 3 |
 | Typst sections | a level-1 section spans its level-2 section and both Agda blocks under them |
 | Zed `v1.23.2` has the code read on `main` | the suffix rule, the scope filter, combined injections and `language_scope_at` are all present |
+
+| Step 2: the end-to-end test against Agda 2.8.0.2 | passes |
+| Step 2: the end-to-end test with each fix undone in turn | fails at its own check: without it, completion offers `→` for `\to` in prose; "Make clause" is offered on the prose line; the helper function goes into the prose, between two blocks, where Agda would not see it |
+| Step 2: `module_name` with `file_stem()` instead | the test fails with `Nat.lagda` for `Nat.lagda.typ` |
 
 Nothing was checked in a running Zed yet; that is the checklist of step 1.
 

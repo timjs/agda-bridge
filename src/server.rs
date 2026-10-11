@@ -25,7 +25,7 @@ use crate::protocol::{
 };
 use crate::settings::Settings;
 use crate::text::{self, Change};
-use crate::{clause, helper, input, iotcm, location, rename, render};
+use crate::{clause, helper, input, iotcm, literate, location, rename, render};
 
 /// How long a hover or a code action waits for Agda to finish another
 /// command.
@@ -57,10 +57,16 @@ const AGDA_EXTENSIONS: &[&str] = &[
 ];
 
 fn is_agda_source(path: &Path) -> bool {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    module_name(path).is_some()
+}
+
+/// The last part of the name of the module in the Agda file at `path`: its
+/// file name without the extension, `Nat` for `Nat.lagda.typ` too.
+fn module_name(path: &Path) -> Option<&str> {
+    let name = path.file_name()?.to_str()?;
     AGDA_EXTENSIONS
         .iter()
-        .any(|extension| name.ends_with(extension))
+        .find_map(|extension| name.strip_suffix(extension))
 }
 
 pub async fn run() {
@@ -1162,7 +1168,8 @@ impl Bridge {
         let edit = {
             let mut documents = self.documents.lock().unwrap();
             let document = documents.get_mut(path).ok_or("This file is not open.")?;
-            let signature = clause::signature_at(&document.text, line)
+            let code = literate::code(path, &document.text);
+            let signature = clause::signature_at(&code, line)
                 .ok_or("There is no type signature on this line to add a clause for.")?;
             // The end of the signature's last line, in chars.
             let end: usize = document
@@ -1256,7 +1263,7 @@ impl Bridge {
                 .take(goal.start)
                 .filter(|c| *c == '\n')
                 .count();
-            let (at, indent) = helper::place(&document.text, line);
+            let (at, indent) = helper::place(&literate::code(path, &document.text), line);
             let start: usize = document
                 .text
                 .split('\n')
@@ -1627,10 +1634,9 @@ impl Bridge {
         defining: &Path,
         name: &str,
     ) -> Vec<String> {
-        let (Some(root), Some(module)) = (self.root(), defining.file_stem()) else {
+        let (Some(root), Some(module)) = (self.root(), module_name(defining)) else {
             return Vec::new();
         };
-        let module = module.to_string_lossy();
         let parts: Vec<&str> = name.split('_').filter(|part| !part.is_empty()).collect();
         let mut found = Vec::new();
         let mut stack = vec![root.to_path_buf()];
@@ -1649,9 +1655,10 @@ impl Bridge {
                 } else if is_agda_source(&path)
                     && !documents.contains_key(&path)
                     && let Ok(text) = std::fs::read_to_string(&path)
+                        .map(|text| literate::code(&path, &text).into_owned())
                     && text
                         .lines()
-                        .any(|line| line.contains("import") && line.contains(&*module))
+                        .any(|line| line.contains("import") && line.contains(module))
                     && parts.iter().any(|part| text.contains(part))
                 {
                     let shown = path.strip_prefix(root).unwrap_or(&path);
@@ -1881,7 +1888,9 @@ impl LanguageServer for Backend {
             let Some(document) = documents.get(&path) else {
                 return Ok(None);
             };
-            let Some(line) = document.text.split('\n').nth(position.line as usize) else {
+            // Outside code, as in the prose of a literate file, the line is blank.
+            let code = literate::code(&path, &document.text);
+            let Some(line) = code.split('\n').nth(position.line as usize) else {
                 return Ok(None);
             };
             let line = line.strip_suffix('\r').unwrap_or(line);
@@ -2118,7 +2127,8 @@ impl LanguageServer for Backend {
                 .problems
                 .iter()
                 .any(|problem| problem.range.start.line <= line && line <= problem.range.end.line);
-            let signature = clause::signature_at(&document.text, line as usize).is_some();
+            let code = literate::code(&path, &document.text);
+            let signature = clause::signature_at(&code, line as usize).is_some();
             (goal, on_problem, signature)
         };
         let action = |title: String, command: &str, arguments: Vec<Value>, kind| {
@@ -2275,5 +2285,23 @@ impl LanguageServer for Backend {
             bridge.report(result).await;
         });
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_modules_without_their_extension() {
+        fn name(file: &str) -> Option<&str> {
+            module_name(Path::new(file))
+        }
+        assert_eq!(name("dir/Nat.agda"), Some("Nat"));
+        assert_eq!(name("Nat.lagda.typ"), Some("Nat"));
+        assert_eq!(name("Nat.lagda.md"), Some("Nat"));
+        assert_eq!(name("Nat.lagda"), Some("Nat"));
+        assert_eq!(name("Nat.typ"), None);
+        assert_eq!(name("TODO.md"), None);
     }
 }

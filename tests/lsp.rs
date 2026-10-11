@@ -2040,3 +2040,139 @@ fn renames_across_open_files() {
     let _ = client.child.wait();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn works_in_literate_typst() {
+    let Some(agda) = find_agda() else {
+        eprintln!("skipping: no Agda found (set $AGDA or put agda on PATH)");
+        return;
+    };
+    let root = setup("literate", &["Literate.lagda.typ"]);
+    let mut client = Client::start(&root.join("bridge.sock"));
+    let init = client.initialize(&root, &agda);
+    let legend = init["capabilities"]["semanticTokensProvider"]["legend"].clone();
+    let file = root.join("Literate.lagda.typ");
+    let file_uri = uri(&file);
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file_uri, "languageId": "literate agda (typst)",
+                "version": 1, "text": text } }),
+    );
+    let line = |text: &str, needle: &str| position_of(text, needle, 0)["line"].as_u64().unwrap();
+
+    // Agda checks the `agda` blocks and the bare one, and skips the
+    // `haskell` block; the goals are where they are in the file.
+    let diagnostics = client.diagnostics(&file_uri, |d| d.len() == 2);
+    assert_eq!(messages(&diagnostics, 3), ["?0 : ℕ", "?1 : ℕ"]);
+    let lines: Vec<u64> = diagnostics
+        .iter()
+        .map(|d| d["range"]["start"]["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [line(&text, "{! aux n !}"), line(&text, "half n =")]);
+
+    // Agda's fences are comments, the prose and the `haskell` block get no
+    // tokens.
+    let tokens = semantic_tokens(&mut client, &file_uri, &legend);
+    let on = |at: u64| tokens.iter().filter(|t| t.0 == at).collect::<Vec<_>>();
+    let fence = on(line(&text, "```agda"));
+    assert!(fence.len() == 1 && fence[0].3 == "comment", "{fence:?}");
+    assert!(on(line(&text, "In words")).is_empty());
+    assert!(on(line(&text, "double :: Int")).is_empty());
+
+    // Symbols are completed in code, also in a comment, not in prose.
+    let complete = |client: &mut Client, needle: &str| {
+        let mut position = position_of(&text, needle, 0);
+        position["character"] = json!(position["character"].as_u64().unwrap() + 3);
+        client.request(
+            "textDocument/completion",
+            json!({ "textDocument": { "uri": file_uri }, "position": position }),
+        )
+    };
+    assert_eq!(complete(&mut client, "\\to.")["items"][0]["label"], "→");
+    assert_eq!(complete(&mut client, "\\to in Agda"), Value::Null);
+
+    // "Make clause" on a signature in a block, not on prose that reads like
+    // one.
+    let make_clause = |client: &mut Client, needle: &str| {
+        client
+            .code_actions(&file_uri, position_of(&text, needle, 0))
+            .contains(&"Make clause".to_string())
+    };
+    assert!(make_clause(&mut client, "double : ℕ → ℕ\n```"));
+    assert!(!make_clause(&mut client, "In words"));
+
+    // The helper goes above the signature in the block before, not above
+    // the prose that mentions `double`.
+    client.received.clear();
+    client.request(
+        "workspace/executeCommand",
+        json!({ "command": "agda.makeHelper", "arguments": [file_uri, 0] }),
+    );
+    let edit = client.wait_for("applyEdit", |m| m["method"] == "workspace/applyEdit");
+    let edits = edit["params"]["edit"]["changes"][&file_uri]
+        .as_array()
+        .unwrap()
+        .clone();
+    text = apply_all(&text, &edits);
+    assert!(
+        text.contains(
+            "```agda\naux : (n : ℕ) → ℕ\naux n = {!  !}\n\ndouble : ℕ → ℕ\n```\n\nIn words, double"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("```agda\ndouble n = aux n\n```"), "{text}");
+
+    // Agda accepts it.
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": file_uri, "version": 2 },
+                "contentChanges": [{ "text": text }] }),
+    );
+    std::fs::write(&file, &text).unwrap();
+    client.received.clear();
+    client.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": file_uri } }),
+    );
+    let diagnostics = client.diagnostics(&file_uri, |d| {
+        d.len() == 2 && d.iter().all(|d| d["severity"] == 3)
+    });
+    let lines: Vec<u64> = diagnostics
+        .iter()
+        .map(|d| d["range"]["start"]["line"].as_u64().unwrap())
+        .collect();
+    assert_eq!(lines, [line(&text, "aux n = {!"), line(&text, "half n =")]);
+
+    // A case split and a new clause stay in their blocks.
+    let run = |client: &mut Client, command: &str, arguments: Value| -> Vec<Value> {
+        client.received.clear();
+        client.request(
+            "workspace/executeCommand",
+            json!({ "command": command, "arguments": arguments }),
+        );
+        let edit = client.wait_for("applyEdit", |m| m["method"] == "workspace/applyEdit");
+        edit["params"]["edit"]["changes"][&file_uri]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let edits = run(&mut client, "agda.caseSplit", json!([file_uri, 1, "n"]));
+    text = apply_all(&text, &edits);
+    assert!(
+        text.ends_with("```\nhalf : ℕ → ℕ\nhalf zero = {!  !}\nhalf (suc n) = {!  !}\n```\n"),
+        "{text}"
+    );
+    let signature = line(&text, "double : ℕ → ℕ\n```");
+    let edits = run(&mut client, "agda.addClause", json!([file_uri, signature]));
+    text = apply_all(&text, &edits);
+    assert!(
+        text.contains("\ndouble : ℕ → ℕ\ndouble n = {!  !}\n```\n\nIn words"),
+        "{text}"
+    );
+
+    client.request("shutdown", Value::Null);
+    client.notify("exit", Value::Null);
+    let _ = client.child.wait();
+    let _ = std::fs::remove_dir_all(&root);
+}

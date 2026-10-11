@@ -13,6 +13,7 @@ mod highlight;
 mod input;
 mod iotcm;
 mod links;
+mod literate;
 mod location;
 mod output;
 mod protocol;
