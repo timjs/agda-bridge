@@ -1,18 +1,32 @@
-# Extensions: literate Agda in Typst
+# Extensions
 
-This document plans extensions beyond the phases of [`PLAN.md`](PLAN.md). The
-first is literate Agda in Typst, files such as `Nat.lagda.typ`, with Typst
-highlighting for the prose, Agda highlighting for the code blocks, and every
-feature of the bridge inside those blocks. It records what Agda and Zed do
-with such files, what was tested and how, the plan, and the decisions that are
-still open. The sources, and how each was used, are listed at the end.
+This document plans extensions beyond the phases of [`PLAN.md`](PLAN.md),
+each in a part of its own:
+
+- [Literate Agda in Typst](#literate-agda-in-typst): files such as
+  `Nat.lagda.typ`, with Typst highlighting for the prose, Agda highlighting
+  for the code blocks, and every feature of the bridge inside those blocks.
+- [Unsolved metas](#unsolved-metas): what Agda knows about the metas it could
+  not solve, shown where they are, in hover and as diagnostics.
+
+Each part records what Agda and Zed do, what was tested and how, the plan, and
+the decisions that are still open, with the sources, and how each was used, at
+its end.
 
 Paths of the extension's files are in zed-agda, and are marked as such, as in
 "zed-agda's `extension.toml`"; all other paths are in this repository.
 
 ---
 
-## 1. Summary
+## Literate Agda in Typst
+
+This part is about literate Agda in Typst, files such as `Nat.lagda.typ`, with
+Typst highlighting for the prose, Agda highlighting for the code blocks, and
+every feature of the bridge inside those blocks.
+
+---
+
+### 1. Summary
 
 - Zed can run several language servers on one file, but it chooses them by the
   file's own language. A code block injected into another language gets
@@ -36,7 +50,7 @@ Paths of the extension's files are in zed-agda, and are marked as such, as in
 
 ---
 
-## 2. What Agda does with `.lagda.typ`
+### 2. What Agda does with `.lagda.typ`
 
 Tested with Agda 2.8.0.2 through `--interaction-json`, on a sample
 `Nat.lagda.typ` with a heading, prose, two `agda` blocks, a goal `{! !}` in the
@@ -64,7 +78,7 @@ second, and a `haskell` block.
 
 ---
 
-## 3. What Zed allows
+### 3. What Zed allows
 
 Read in Zed's source at commit `4240146` (`main` on 8 October 2026), and
 checked to be present in tag `v1.23.2` (commit `c019950`), the version
@@ -144,7 +158,7 @@ Agda.
 
 ---
 
-## 4. The grammars, tested
+### 4. The grammars, tested
 
 A small Rust program, using `tree-sitter` 0.25.10 with both grammars compiled
 from source at the commits Zed uses (tree-sitter-typst `abe60cb`,
@@ -213,7 +227,7 @@ injection query, the changed highlights, and zed-agda's three Agda queries
 
 ---
 
-## 5. What the bridge needs
+### 5. What the bridge needs
 
 Already right:
 
@@ -247,9 +261,9 @@ bridge can do the same.
 
 ---
 
-## 6. Plan
+### 6. Plan
 
-### Step 1, zed-agda: the language "Literate Agda (Typst)"
+#### Step 1, zed-agda: the language "Literate Agda (Typst)"
 
 On top of branch `use-agda-bridge`, a new directory
 `languages/literate-agda-typst/`:
@@ -311,7 +325,7 @@ To check in Zed, with the dev extension:
 - A `.lagda.typ` module and an `.agda` module can import each other, through
   the one bridge.
 
-### Step 2, the bridge: literate files (done)
+#### Step 2, the bridge: literate files (done)
 
 Built on branch `literate-typst`:
 
@@ -355,7 +369,7 @@ Tests:
   before, that Agda accepts the result, and that a case split and "Make
   clause" stay in their blocks.
 
-### Step 3, optional: Tinymist for the prose
+#### Step 3, optional: Tinymist for the prose
 
 - zed-agda's `extension.toml` gets a second server for "Literate Agda (Typst)",
   under a name of its own, such as `tinymist-literate`, since server names are
@@ -374,7 +388,7 @@ Tests:
 
 ---
 
-## 7. Without code: open the file as Agda
+### 7. Without code: open the file as Agda
 
 ```json
 "file_types": { "Agda": ["*.lagda.typ"] },
@@ -389,7 +403,7 @@ prose without any, since Agda gives it no tokens; `full` also applies to
 
 ---
 
-## 8. Decisions
+### 8. Decisions
 
 1. **Bare blocks.** The request was for ```` ```agda ```` blocks only, but
    Agda also checks bare blocks. Taken in step 1: they are highlighted as Agda
@@ -404,7 +418,7 @@ prose without any, since Agda gives it no tokens; `full` also applies to
 
 ---
 
-## 9. Checks and their results
+### 9. Checks and their results
 
 | Check | Result |
 | --- | --- |
@@ -425,7 +439,7 @@ Nothing was checked in a running Zed yet; that is the checklist of step 1.
 
 ---
 
-## 10. Sources and how they were used
+### 10. Sources and how they were used
 
 | Source | What I took from it |
 | --- | --- |
@@ -439,3 +453,114 @@ Nothing was checked in a running Zed yet; that is the checklist of step 1.
 | This repository (`src/server.rs`, `highlight.rs`, `helper.rs`, `clause.rs`, `goals.rs`, `input.rs`, `zed/semantic_token_rules.json`) | what already works in literate files, and what reads lines itself |
 | zed-agda, branch `use-agda-bridge` (`extension.toml`, `src/lib.rs`, `languages/agda/*`) | where the new language goes, and the Agda queries tested in section 4 |
 | Typst 0.15.1 and Tinymist from Homebrew on this machine | that the literate file is valid Typst, and that Tinymist is on `PATH` for step 3 |
+
+---
+
+## Unsolved metas
+
+Agda colours a meta it could not solve yellow, but the bridge said little more
+about it: the output file listed its name and type, without saying where it
+is, and hover showed nothing. This part plans what more the bridge can show,
+from what Agda knows about these metas and what other editors do with it.
+
+---
+
+### 1. Summary
+
+- After a load, Agda reports every unsolved meta with its name, its type and
+  its range, the same as for a goal. A meta for an implicit argument is named
+  after that argument, `_m_304` for an implicit `m`. On request,
+  `Cmd_constraints` gives the constraints, each with the meta it is blocked
+  on. Agda has no command that gives a meta's context: that needs a goal.
+- Emacs lists the metas with clickable locations; banacorn's VS Code extension
+  lists them with buttons that jump to them; agda2-vscode, the bridge's model,
+  lists them without locations. None explains a meta where it is.
+- The plan has six items. This branch builds the first three of the
+  recommended order: hover on a meta (item 1), metas as diagnostics of
+  severity warning (item 2), and the error about unsolved constraints on the
+  code it is about instead of at the start of the file (item 6).
+
+---
+
+### 2. What Agda gives
+
+Tested with Agda 2.8.0.2 through `--interaction-json`, on a file with an
+implicit argument nothing determines (`const (suc zero)`, with
+`const : {m : ℕ} → ℕ → ℕ`), an underscore nothing determines (`suc _`), and
+a constraint stuck on an underscore (`stuck : pred _ ≡ zero`,
+`stuck = refl`).
+
+- `Cmd_load` answers with `AllGoalsWarnings`, whose `invisibleGoals` are the
+  unsolved metas: `_m_15 : ℕ` on `const`, `_18 : ℕ` on the `_` of `two`, and
+  `_21 : ℕ` on the `_` of `stuck`. Each has a name (`constraintObj.name`), a
+  type and a range, in the same form as a goal's. The bridge kept the name and
+  type for the output file, and dropped the range.
+- A meta for an implicit argument is named `_<argument>_<number>`, and its
+  range is the name of the function, `const`; for an operator, the operator
+  part, `⊕` in `zero ⊕ suc zero`.
+- The stuck constraint makes Agda add an error, `[UnsolvedConstraints]`, with
+  the constraint as Agda prints it, `pred _21 = zero : ℕ (blocked on _21)`,
+  but without a location: the bridge put it at line 1, column 1. Agda's
+  highlighting marks the code it is about, `refl`, as `unsolvedconstraint`.
+- `Cmd_constraints` answers with `Constraints`, a list of constraints as
+  objects: the constraint by kind (`CmpInType` with `constraintObjs`
+  `["pred _21", "zero"]`, `comparison` `CmpEq` and `type` `ℕ`), its range,
+  here empty, and what it is blocked on (`UnblockOnMeta` with the meta's
+  number, 21). Agda's own printer for these, the `Pretty` instance of
+  `OutputConstraint` in `src/full/Agda/Interaction/BasicOps.hs`, can be
+  ported as it is.
+- A goal's context, from `Cmd_goal_type_context`, lists the constraints that
+  mention the goal as text already (`outputForms`, such as
+  `_22 := refl (blocked on problem 31)`), so goal hovers need no change.
+- Every command that gives a context, such as `Cmd_goal_type_context`, takes a
+  goal number (`InteractionId`); none takes a meta. To see a meta's context,
+  it has to become a goal: `?` in place of a `_`, or `{m = ?}` for an implicit
+  argument.
+- Agda's highlighting for these ranges has an empty `note`, so it has no text
+  to show.
+
+---
+
+### 3. What other editors do
+
+| Editor | Unsolved metas | Constraints | Other |
+| --- | --- | --- | --- |
+| Emacs (`agda2-mode`) | `*All Goals*` lists `_13 : ℕ  [ at …/Metas.agda:15.8-9 ]`; that buffer is in `compilation-mode`, so the location is clickable and `next-error` steps through them | `C-c C-=` | `C-c C-x C-h` shows implicit arguments; a goal's context lists the constraints mentioning it; no hover |
+| VS Code, banacorn's `agda-mode-vscode` | the panel lists the metas, each with a button that jumps to it | "Show constraints", at four levels of normalisation | toggles for implicit and irrelevant arguments |
+| VS Code, `agda2-vscode` | "Unsolved Metas (not in scope)" with name and type only, no location | "Show constraints" | toggle for implicit arguments |
+
+---
+
+### 4. Plan
+
+1. **Hover on a meta.** The bridge keeps the metas of each load, and moves them
+   along with edits, as it does goals and names; an edit that touches a meta
+   removes it until the next load. Hover anywhere in a meta's range shows its
+   name and type, which implicit argument it is or how to make it a goal, and
+   the constraints on it, from `Cmd_constraints`, which the bridge asks after
+   a load that left metas. Below that comes the usual hover for the name under
+   the cursor.
+2. **Metas as diagnostics,** of severity warning. They appear in Zed's
+   project diagnostics (`cmd-shift-m`), inline, and in the jumps between
+   diagnostics of severity warning. Goals stay information, so jumps between
+   goals still find goals only.
+3. **Locations in the output file:** a list of metas of its own, with a
+   location after each, as in Emacs.
+4. **Code actions "Show constraints" and "Show implicit arguments",** as
+   Emacs's `C-c C-=` and `C-c C-x C-h`.
+5. **A code action "Make goal" on a meta:** `?` in place of `_`, and
+   `{m = ?}` after the name of a function applied in prefix form; not for
+   operators.
+6. **The error about unsolved constraints on its code.** An
+   `[UnsolvedConstraints]` error without a location goes on the ranges Agda
+   highlights as `unsolvedconstraint`, instead of at line 1, column 1.
+
+This branch builds 1, 2 and 6; then 4, then 5.
+
+---
+
+### 5. Decisions
+
+1. **Severity of the meta diagnostics:** warning, like Agda's yellow.
+2. **The branch:** `unsolved-metas`, from `literate-typst`, since the files
+   in use are literate and this document is on that branch.
