@@ -97,9 +97,64 @@ pub fn labels(listed: &[OutputConstraint]) -> HashMap<String, String> {
         .iter()
         .filter_map(|goal| {
             let name = goal.constraint_obj.get("name")?.as_str()?;
-            Some((name.to_string(), label(name, &Kind::of(goal))))
+            Some((name.to_string(), label_of(goal)?))
         })
         .collect()
+}
+
+/// A meta Agda listed, as Agda prints it in its list of goals.
+pub fn label_of(goal: &OutputConstraint) -> Option<String> {
+    let name = goal.constraint_obj.get("name")?.as_str()?;
+    Some(label(name, &Kind::of(goal)))
+}
+
+/// The first interval of the range of a goal or meta Agda listed.
+fn interval(goal: &OutputConstraint) -> Option<&Value> {
+    goal.constraint_obj.get("range")?.as_array()?.first()
+}
+
+/// The range of a goal or meta Agda listed, as 0-based char offsets.
+pub fn range_of(goal: &OutputConstraint) -> Option<(usize, usize)> {
+    let interval = interval(goal)?;
+    let position =
+        |end: &str| Some(interval.get(end)?.get("pos")?.as_u64()?.checked_sub(1)? as usize);
+    Some((position("start")?, position("end")?))
+}
+
+/// Where a goal or meta Agda listed is, as Agda gives it: 1-based lines,
+/// and 1-based columns that count characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Location {
+    pub line: u64,
+    pub column: u64,
+    pub end_line: u64,
+    pub end_column: u64,
+}
+
+impl Location {
+    /// As Agda writes a range in its messages: `15.8-9`, or `15.8-16.3`
+    /// across lines.
+    pub fn agda(&self) -> String {
+        match self.line == self.end_line {
+            true => format!("{}.{}-{}", self.line, self.column, self.end_column),
+            false => format!(
+                "{}.{}-{}.{}",
+                self.line, self.column, self.end_line, self.end_column
+            ),
+        }
+    }
+}
+
+/// The location of a goal or meta Agda listed.
+pub fn location_of(goal: &OutputConstraint) -> Option<Location> {
+    let interval = interval(goal)?;
+    let at = |end: &str, key: &str| interval.get(end)?.get(key)?.as_u64();
+    Some(Location {
+        line: at("start", "line")?,
+        column: at("start", "col")?,
+        end_line: at("end", "line")?,
+        end_column: at("end", "col")?,
+    })
 }
 
 /// Whether `text` has `name` as a word of its own, so that `_21` is not found
@@ -116,17 +171,13 @@ pub fn from_invisible_goals(goals: &[OutputConstraint]) -> Vec<Meta> {
     goals
         .iter()
         .filter_map(|goal| {
-            let object = goal.constraint_obj.as_object()?;
-            let name = object.get("name")?.as_str()?.to_string();
-            let interval = object.get("range")?.as_array()?.first()?;
-            let position = |end: &str| -> Option<usize> {
-                Some(interval.get(end)?.get("pos")?.as_u64()? as usize - 1)
-            };
+            let name = goal.constraint_obj.get("name")?.as_str()?.to_string();
+            let (start, end) = range_of(goal)?;
             Some(Meta {
                 name,
                 kind: Kind::of(goal),
-                start: position("start")?,
-                end: position("end")?,
+                start,
+                end,
                 binder: None,
             })
         })

@@ -2274,6 +2274,30 @@ fn explains_unsolved_metas() {
         assert!(form, "{message}");
     }
 
+    // The output file lists the metas with their locations, as links from
+    // the output file to the place; not the two on the `with` goal. The
+    // bridge writes it after Zed (here, the test) answers its request to
+    // refresh the semantic tokens.
+    client.wait_for("refresh", |m| {
+        m["method"] == "workspace/semanticTokens/refresh"
+    });
+    let output = wait_for_output(&root.join(".zed/agda-output.md"), "## Unsolved metas");
+    let listed: Vec<&str> = output
+        .lines()
+        .filter(|line| line.starts_with("- `"))
+        .collect();
+    assert_eq!(listed.len(), 7, "{output}");
+    let line = at(&text, "const (suc", 0)["line"].as_u64().unwrap() + 1;
+    assert!(
+        listed.iter().any(|item| item.starts_with("- `_m_")
+            && item.ends_with(&format!(
+                " : ℕ` at [Metas.agda:{line}.7-12](../Metas.agda:{line}:7)"
+            ))),
+        "{output}"
+    );
+    let with = at(&text, "four n with", 0)["line"].as_u64().unwrap() + 1;
+    assert!(!output.contains(&format!("Metas.agda:{with}:")), "{output}");
+
     // The constraint Agda could not solve is an error without a location in
     // Agda's message; it goes on the code Agda highlights for it.
     let errors: Vec<&Value> = diagnostics.iter().filter(|d| d["severity"] == 1).collect();
@@ -2371,7 +2395,7 @@ fn explains_unsolved_metas() {
             .contains("Unsolved meta")
     );
 
-    // Saving the filled `_` of `three` leaves three metas.
+    // Saving the filled `_` of `three` leaves one meta fewer.
     std::fs::write(&file, &text).unwrap();
     client.notify(
         "textDocument/didSave",
@@ -2384,6 +2408,71 @@ fn explains_unsolved_metas() {
             .all(|d| d["range"]["start"] != at(&text, "suc zero", 4)),
         "{diagnostics:#?}"
     );
+
+    // A meta becomes a goal by a code action: a `_`, and an implicit
+    // argument of a function applied in prefix form; not one of an operator
+    // applied infix, nor the type of a binder. On every meta, the output file
+    // can be opened.
+    let actions = |client: &mut Client, text: &str, needle: &str, skip: u64| -> Vec<Value> {
+        let position = at(text, needle, skip);
+        let result = client.request(
+            "textDocument/codeAction",
+            json!({
+                "textDocument": { "uri": file_uri },
+                "range": { "start": position, "end": position },
+                "context": { "diagnostics": [] },
+            }),
+        );
+        result.as_array().cloned().unwrap_or_default()
+    };
+    let titles = |actions: &[Value]| -> Vec<String> {
+        actions
+            .iter()
+            .map(|action| action["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let on_const = actions(&mut client, &text, "const (suc", 1);
+    assert_eq!(
+        titles(&on_const),
+        ["Make goal of implicit argument `m`", "Open output file"]
+    );
+    assert_eq!(
+        titles(&actions(&mut client, &text, "⊕ zero", 0)),
+        ["Open output file"]
+    );
+    // On `k`, a signature, "Make clause" too, but no goal.
+    let on_binder = titles(&actions(&mut client, &text, "∀ {k}", 3));
+    assert!(
+        on_binder.contains(&"Open output file".to_string())
+            && !on_binder.iter().any(|title| title.starts_with("Make goal")),
+        "{on_binder:?}"
+    );
+    let on_underscore = actions(&mut client, &text, "six = _", 6);
+    assert_eq!(
+        titles(&on_underscore),
+        ["Make goal of `_`", "Open output file"]
+    );
+    let edit = |action: &Value| action["edit"]["changes"][&file_uri][0].clone();
+    assert_eq!(edit(&on_const[0])["newText"], " {m = {!  !}}");
+    assert_eq!(edit(&on_underscore[0])["newText"], "{!  !}");
+    // Both edits refer to the same text; the later one first.
+    text = apply(&apply(&text, &edit(&on_underscore[0])), &edit(&on_const[0]));
+    assert!(
+        text.contains("one = const {m = {!  !}} (suc zero)") && text.contains("six = {!  !}"),
+        "{text}"
+    );
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": file_uri, "version": 4 }, "contentChanges": [{ "text": text }] }),
+    );
+    // After a save, Agda has two more goals, and two metas fewer.
+    std::fs::write(&file, &text).unwrap();
+    client.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": file_uri } }),
+    );
+    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 3).len() == 4);
+    assert_eq!(messages(&diagnostics, 2).len(), 4, "{diagnostics:#?}");
 
     // A file that shows implicit arguments itself keeps them: the meta is
     // printed with them, so nothing is added, and `refl`'s type has them.

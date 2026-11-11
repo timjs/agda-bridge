@@ -2,7 +2,8 @@
 //! `*Agda information*` buffer. Agda code goes in ```agda fences, so Zed
 //! highlights it with the Agda grammar in hovers and in Markdown previews.
 
-use crate::protocol::{DisplayInfo, GoalInfo, TypeAux, message_text};
+use crate::metas;
+use crate::protocol::{DisplayInfo, GoalInfo, OutputConstraint, TypeAux, message_text};
 use serde_json::Value;
 
 const RULE: &str = "────────────────────────────────────────";
@@ -153,8 +154,15 @@ pub fn why_in_scope(message: &str) -> String {
         .join("\n")
 }
 
-/// Any `DisplayInfo`, for the output file.
-pub fn display_info(raw: &Value) -> String {
+/// The file Agda answered about, for the locations in the output file: its
+/// name, and a link to it from the output file, which takes `:line:column`.
+pub struct Source {
+    pub name: String,
+    pub link: Box<dyn Fn(u64, u64) -> String + Send + Sync>,
+}
+
+/// Any `DisplayInfo`, for the output file, with locations in `source`.
+pub fn display_info(raw: &Value, source: Option<&Source>) -> String {
     match DisplayInfo::parse(raw) {
         DisplayInfo::AllGoalsWarnings {
             visible_goals,
@@ -166,9 +174,9 @@ pub fn display_info(raw: &Value) -> String {
             section(&mut out, "Errors", errors.iter().map(message_text));
             let goals = visible_goals
                 .iter()
-                .chain(&invisible_goals)
                 .map(|goal| format!("{} : {}", goal.label(), goal.ty.as_deref().unwrap_or("_")));
             section(&mut out, "Goals", goals);
+            unsolved_metas(&mut out, &visible_goals, &invisible_goals, source);
             section(&mut out, "Warnings", warnings.iter().map(message_text));
             if out.is_empty() {
                 out.push_str("All done: no goals, errors or warnings.\n");
@@ -215,6 +223,52 @@ pub fn display_info(raw: &Value) -> String {
             serde_json::to_string_pretty(raw).unwrap_or_default()
         ),
     }
+}
+
+/// The unsolved metas, each with its location, a link when the output file
+/// knows where the file is, as in Emacs's `*All Goals*`:
+/// `` `_13 : ℕ` at [Metas.agda:15.8-9](../Metas.agda:15:8) ``. A meta on a
+/// goal is left out, as in the diagnostics: it is the goal's own type, or
+/// that type's sort, which the goal shows.
+fn unsolved_metas(
+    out: &mut String,
+    goals: &[OutputConstraint],
+    metas: &[OutputConstraint],
+    source: Option<&Source>,
+) {
+    let goal_ranges: Vec<(usize, usize)> = goals.iter().filter_map(metas::range_of).collect();
+    let items: Vec<String> = metas
+        .iter()
+        .filter(|meta| {
+            !metas::range_of(meta).is_some_and(|(start, end)| {
+                goal_ranges
+                    .iter()
+                    .any(|&(from, to)| from <= start && end <= to)
+            })
+        })
+        .filter_map(|meta| {
+            let label = metas::label_of(meta)?;
+            let at = match (metas::location_of(meta), source) {
+                (Some(location), Some(source)) => format!(
+                    " at [{}:{}]({})",
+                    source.name,
+                    location.agda(),
+                    (source.link)(location.line, location.column)
+                ),
+                (Some(location), None) => format!(" at line {}", location.agda()),
+                (None, _) => String::new(),
+            };
+            Some(format!("- `{label}`{at}\n"))
+        })
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+    out.push_str("## Unsolved metas\n\n");
+    for item in items {
+        out.push_str(&item);
+    }
+    out.push('\n');
 }
 
 fn section(out: &mut String, title: &str, items: impl Iterator<Item = String>) {
@@ -331,5 +385,43 @@ mod tests {
             why_in_scope(message),
             "suc is in scope as\n  * a constructor Nat.ℕ.suc brought into scope by\n    - the opening of Nat (Agda gives no location in a file without goals)\n    - its definition at Nat.agda:5.3-6"
         );
+    }
+
+    #[test]
+    fn lists_unsolved_metas_with_locations() {
+        // Shaped as Agda 2.8.0.2 sends them: a goal, the type of a `with`
+        // goal and its sort on that goal, an implicit argument and a sort.
+        let at = |pos: u64, line: u64, col: u64| serde_json::json!({ "pos": pos, "line": line, "col": col });
+        let raw = serde_json::json!({
+            "kind": "AllGoalsWarnings",
+            "visibleGoals": [
+                { "constraintObj": { "id": 2, "range": [{ "start": at(200, 13, 16), "end": at(206, 13, 22) }] },
+                  "kind": "OfType", "type": "_15" },
+            ],
+            "invisibleGoals": [
+                { "constraintObj": { "name": "_15", "range": [{ "start": at(200, 13, 16), "end": at(206, 13, 22) }] },
+                  "kind": "OfType", "type": "_14" },
+                { "constraintObj": { "name": "_m_19", "range": [{ "start": at(300, 22, 7), "end": at(305, 22, 12) }] },
+                  "kind": "OfType", "type": "ℕ" },
+                { "constraintObj": { "name": "_10", "range": [{ "start": at(400, 30, 9), "end": at(401, 31, 1) }] },
+                  "kind": "JustSort" },
+            ],
+            "warnings": [],
+            "errors": [],
+        });
+        let source = Source {
+            name: "Metas.agda".into(),
+            link: Box::new(|line, column| format!("../Metas.agda:{line}:{column}")),
+        };
+        let markdown = display_info(&raw, Some(&source));
+        assert_eq!(
+            markdown,
+            "## Goals\n\n```agda\n?2 : _15\n```\n\n\
+             ## Unsolved metas\n\n\
+             - `_m_19 : ℕ` at [Metas.agda:22.7-12](../Metas.agda:22:7)\n\
+             - `Sort _10` at [Metas.agda:30.9-31.1](../Metas.agda:30:9)\n\n"
+        );
+        // Without a link, the location alone.
+        assert!(display_info(&raw, None).contains("- `_m_19 : ℕ` at line 22.7-12\n"));
     }
 }

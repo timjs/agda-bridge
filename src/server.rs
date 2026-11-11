@@ -81,6 +81,15 @@ pub async fn run() {
         .await;
 }
 
+/// A meta at the cursor that a code action makes a goal, by `edit`; for an
+/// implicit argument, with the function's name as written and its link, to
+/// leave out an operator applied infix.
+struct MakeGoal {
+    title: String,
+    edit: TextEdit,
+    function: Option<(String, Link)>,
+}
+
 /// What the client said when the bridge started; it does not change.
 struct Config {
     root: Option<PathBuf>,
@@ -359,10 +368,11 @@ impl Outcome {
         outcome
     }
 
-    fn markdown(&self) -> String {
+    /// Agda's answers, for the output file, with locations in `source`.
+    fn markdown(&self, source: Option<&render::Source>) -> String {
         self.displays
             .iter()
-            .map(render::display_info)
+            .map(|display| render::display_info(display, source))
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -469,6 +479,17 @@ impl Bridge {
 
     fn output(&self) -> Option<Arc<Output>> {
         self.output.lock().unwrap().clone()
+    }
+
+    /// The file at `path`, for the locations in the output file: its name,
+    /// and links to it from the output file.
+    fn source(&self, path: &Path) -> Option<render::Source> {
+        let output = self.output()?;
+        let file = path.to_path_buf();
+        Some(render::Source {
+            name: path.file_name()?.to_string_lossy().into_owned(),
+            link: Box::new(move |line, column| output.link_to(&file, line, column)),
+        })
     }
 
     /// Take new settings: report wrong ones, restart Agda at the next
@@ -802,7 +823,8 @@ impl Bridge {
         self.publish(path).await;
         // Zed asked for tokens when the file opened; ask it to ask again.
         let _ = self.client.semantic_tokens_refresh().await;
-        self.show_output("Load", path, &outcome.markdown()).await;
+        self.show_output("Load", path, &outcome.markdown(self.source(path).as_ref()))
+            .await;
         let goal_count = outcome.goal_types.len();
         Ok(match outcome.errors.len() {
             0 => format!("Loaded {name}: {goal_count} goal(s)."),
@@ -976,7 +998,8 @@ impl Bridge {
                 Ok(String::new())
             }
             _ => {
-                self.show_output(&title, path, &outcome.markdown()).await;
+                self.show_output(&title, path, &outcome.markdown(self.source(path).as_ref()))
+                    .await;
                 Err(outcome
                     .errors
                     .first()
@@ -1113,8 +1136,12 @@ impl Bridge {
             return Ok(format!("Stopped {} on goal ?{id}.", title.to_lowercase()));
         }
         if outcome.give.is_none() {
-            self.show_output(&format!("{title} ?{id}"), path, &outcome.markdown())
-                .await;
+            self.show_output(
+                &format!("{title} ?{id}"),
+                path,
+                &outcome.markdown(self.source(path).as_ref()),
+            )
+            .await;
             return Err(outcome
                 .auto
                 .clone()
@@ -1123,8 +1150,12 @@ impl Bridge {
         }
         let given = self.apply_give(path, &outcome).await?;
         self.publish(path).await;
-        self.show_output(&format!("{title} ?{given}"), path, &outcome.markdown())
-            .await;
+        self.show_output(
+            &format!("{title} ?{given}"),
+            path,
+            &outcome.markdown(self.source(path).as_ref()),
+        )
+        .await;
         Ok(format!("Filled goal ?{given}."))
     }
 
@@ -1225,8 +1256,12 @@ impl Bridge {
         drop(guard);
 
         let Some((split, variant, clauses)) = outcome.make_case.clone() else {
-            self.show_output(&format!("Case split ?{id}"), path, &outcome.markdown())
-                .await;
+            self.show_output(
+                &format!("Case split ?{id}"),
+                path,
+                &outcome.markdown(self.source(path).as_ref()),
+            )
+            .await;
             return Err(outcome
                 .errors
                 .first()
@@ -1369,8 +1404,12 @@ impl Bridge {
         );
         let Some((_, GoalInfo::HelperFunction { signature })) = outcome.goal_info.clone() else {
             drop(guard);
-            self.show_output(&format!("Helper function ?{id}"), path, &outcome.markdown())
-                .await;
+            self.show_output(
+                &format!("Helper function ?{id}"),
+                path,
+                &outcome.markdown(self.source(path).as_ref()),
+            )
+            .await;
             return Err(outcome
                 .errors
                 .first()
@@ -1456,7 +1495,8 @@ impl Bridge {
         if solutions.is_empty() {
             drop(guard);
             if let Some(error) = outcome.errors.first() {
-                self.show_output(&title, path, &outcome.markdown()).await;
+                self.show_output(&title, path, &outcome.markdown(self.source(path).as_ref()))
+                    .await;
                 return Err(error.clone());
             }
             return Err(match id {
@@ -1477,7 +1517,7 @@ impl Bridge {
                 )
                 .await?,
             );
-            markdown = given.markdown();
+            markdown = given.markdown(self.source(path).as_ref());
             if given.give.is_some() {
                 filled.push(self.apply_give(path, &given).await?);
             }
@@ -2316,12 +2356,54 @@ impl LanguageServer for Backend {
         let Some(path) = path_of(&uri) else {
             return Ok(None);
         };
-        let (goal, on_problem, signature) = {
+        let (goal, on_problem, signature, unsolved, on_meta) = {
             let documents = self.0.documents.lock().unwrap();
             let Some(document) = documents.get(&path) else {
                 return Ok(None);
             };
             let offset = text::offset_of(&document.text, params.range.start);
+            // The metas at the cursor that can become goals, as edits: a `_`
+            // becomes `{!  !}`; an implicit argument `m` is given as
+            // `{m = {!  !}}` after the name of the function, which needs the
+            // name's definition, to leave out an operator applied infix.
+            let unsolved: Vec<MakeGoal> = text::hovered(&document.text, offset)
+                .map(|at| metas::metas_under(&document.metas, at))
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|meta| {
+                    let source: String = document
+                        .text
+                        .chars()
+                        .skip(meta.start)
+                        .take(meta.end - meta.start)
+                        .collect();
+                    match (meta.argument(), source.as_str()) {
+                        (Some(argument), _) => {
+                            let link = links::link_under(&document.links, meta.start)
+                                .filter(|link| (link.start, link.end) == (meta.start, meta.end))?;
+                            let end = range_of(&document.text, meta.end, meta.end);
+                            let edit =
+                                TextEdit::new(end, format!(" {{{argument} = {GOAL_MARKER}}}"));
+                            let title = format!("Make goal of implicit argument `{argument}`");
+                            Some(MakeGoal {
+                                title,
+                                edit,
+                                function: Some((source.clone(), link.clone())),
+                            })
+                        }
+                        (None, "_") => {
+                            let range = range_of(&document.text, meta.start, meta.end);
+                            let edit = TextEdit::new(range, GOAL_MARKER.to_string());
+                            Some(MakeGoal {
+                                title: "Make goal of `_`".to_string(),
+                                edit,
+                                function: None,
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
             let goal = goals::goal_at(&document.goals, offset).map(|goal| {
                 let with = goals::add_with(&document.text, goal).is_some();
                 let content = goal.content(&document.text);
@@ -2338,7 +2420,9 @@ impl LanguageServer for Backend {
                 .any(|problem| problem.range.start.line <= line && line <= problem.range.end.line);
             let code = literate::code(&path, &document.text);
             let signature = clause::signature_at(&code, line as usize).is_some();
-            (goal, on_problem, signature)
+            let on_meta = text::hovered(&document.text, offset)
+                .is_some_and(|at| !metas::metas_under(&document.metas, at).is_empty());
+            (goal, on_problem, signature, unsolved, on_meta)
         };
         let action = |title: String, command: &str, arguments: Vec<Value>, kind| {
             CodeActionOrCommand::CodeAction(CodeAction {
@@ -2421,9 +2505,32 @@ impl LanguageServer for Backend {
                 ));
             }
         }
+        // A meta becomes a goal by an edit, which Agda loads at the next save.
+        for MakeGoal {
+            title,
+            edit,
+            function,
+        } in unsolved
+        {
+            if let Some((occurrence, link)) = function {
+                let (site_path, site) = self.0.definition_site(&path, &link);
+                if self.0.expression_for(&occurrence, &site_path, site) != occurrence {
+                    continue;
+                }
+            }
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title,
+                kind: Some(CodeActionKind::REFACTOR_REWRITE),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(HashMap::from([(uri.clone(), vec![edit])])),
+                    ..WorkspaceEdit::default()
+                }),
+                ..CodeAction::default()
+            }));
+        }
         // Offered where output matters, not on every line, so Zed does not
         // show a code action indicator everywhere.
-        if goal.is_some() || on_problem {
+        if goal.is_some() || on_problem || on_meta {
             actions.push(action(
                 "Open output file".into(),
                 COMMAND_OPEN_OUTPUT,

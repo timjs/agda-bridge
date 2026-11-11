@@ -112,6 +112,9 @@ on Linux) are:
 | a goal | `Auto`, `Solve`, `Solve all goals` | proof search, or the solutions unification already found |
 | a goal with text | `Print normal form in output` | the normal form of the text, as Emacs's `C-c C-n` |
 | a goal or an error | `Print goal in output`, `Open output file` | the output file |
+| an unsolved `_` | ``Make goal of `_` `` | `{!  !}` in place of the `_`, a goal at the next save |
+| an unsolved implicit argument | ``Make goal of implicit argument `m` `` | `{m = {!  !}}` after the name of the function, a goal at the next save; not for an operator applied infix |
+| an unsolved meta | `Open output file` | the output file, which lists the metas |
 
 New clauses, from `Make clause`, a case split, `With-abstract` or a helper
 function, are loaded when you save the file; until then their goals have no
@@ -156,8 +159,9 @@ tokens on), and is a diagnostic of the severity "warning" on the code it is
 about, such as `Unsolved meta _m_304 : ℕ, the implicit argument m`. Agda names
 a meta for an implicit argument after that argument, and puts it on the name
 of the function. A variable bound without a type, as `m` in `∀ {m} → …`, gets
-one for its type, `Unsolved meta _360 : Set, the type of m`. The warnings move along with your typing until the next
-save, and filling a goal drops those it solved. A meta on a goal is left out:
+one for its type, `Unsolved meta _360 : Set, the type of m`. The warnings move
+along with your typing until the next save, and filling a goal drops those it
+solved. A meta on a goal is left out:
 it is the goal's own type, or that type's sort, which Agda doesn't know yet,
 as for the goal in `with {!  !}`; the goal shows it, as in `?2 : _15`, and
 filling the goal solves it.
@@ -186,6 +190,21 @@ For the versions with implicit arguments, the bridge asks Agda after a load
 that left metas, with implicit arguments switched on for that moment only;
 that takes Agda about a millisecond. A file with `--show-implicit` shows them
 throughout, so it needs no second version.
+
+To see a meta's context, make it a goal: on a `_`, the code action ``Make
+goal of `_` `` puts `{!  !}` in its place, and on an implicit argument,
+``Make goal of implicit argument `m` `` gives it as `{m = {!  !}}` after the
+name of the function. After a save, Agda checks the new goal, whose hover
+shows its type and context. An operator applied infix, as `⊕` in
+`zero ⊕ zero`, gets no such action, since only the prefix form, `_⊕_ {m = …}
+zero zero`, can take a named argument.
+
+The output file also lists the metas, under "Unsolved metas", as Emacs's
+`*All Goals*` does: each with its location, as a link that Zed's Markdown
+preview opens at the meta, such as
+``- `_m_304 : Nat.ℕ` at [Judgement.lagda.typ:119.21-22](…)``. The links
+point at where the metas were at the last save. `Open output file` is
+offered on every meta.
 
 When constraints stay unsolved, Agda also reports an error, "Failed to solve
 the following constraints", without a location. The bridge puts it on the
