@@ -555,7 +555,7 @@ a constraint stuck on an underscore (`stuck : pred _ ≡ zero`,
    `[UnsolvedConstraints]` error without a location goes on the ranges Agda
    highlights as `unsolvedconstraint`, instead of at line 1, column 1.
 
-This branch builds 1, 2 and 6; then 4, then 5.
+Built on this branch: 1, 2 and 6, see section 6. Next: 4, then 5, and 3.
 
 ---
 
@@ -564,3 +564,72 @@ This branch builds 1, 2 and 6; then 4, then 5.
 1. **Severity of the meta diagnostics:** warning, like Agda's yellow.
 2. **The branch:** `unsolved-metas`, from `literate-typst`, since the files
    in use are literate and this document is on that branch.
+3. **Metas on a goal are left out.** `with {!  !}` leaves two metas on its
+   goal, the goal's type and that type's sort, which Agda doesn't know yet.
+   They are no separate problem: the goal shows its type, as `?2 : _15`, and
+   filling it solves them. Agda never checks a goal's text, so a meta within a
+   goal is always such a one.
+4. **Metas are read at a load.** After a goal command Agda lists the metas
+   again, but with the ranges of the last load, which edits have moved since.
+   So the bridge keeps its own ranges, and only drops the metas the command
+   solved; metas the command made appear at the next save.
+5. **A constraint is on a meta** when it is blocked on it, or mentions it.
+   Constraints name metas by number, `_304`; the bridge uses the names the
+   diagnostics use, `_m_304`.
+
+---
+
+### 6. What was built
+
+On branch `unsolved-metas`:
+
+- A new module, `src/metas.rs`, keeps the metas of a load: name, kind and
+  range. The kind is Agda's: a term of a type (`OfType`), or itself a type or
+  a sort (`JustType`, `JustSort`), printed as Agda prints them: `_15 : _14`,
+  `Type _3`, `Sort _14`. Metas move along with edits as goals and names do,
+  and an edit that touches one removes it.
+- `src/server.rs` publishes each meta as a diagnostic of severity warning,
+  such as `Unsolved meta _m_304 : Nat.ℕ, the implicit argument m`.
+- After a load or a goal command that leaves metas, the bridge asks
+  `Cmd_constraints`. `metas::constraint_text` prints its objects as Agda
+  prints them for Emacs, a port of the `Pretty` instance of
+  `OutputConstraint`, for every kind in Agda 2.8.0's JSON encoding; a kind it
+  doesn't know is shown as Agda's JSON.
+- Hover on a meta shows, above the usual hover: the meta as Agda prints it,
+  how to see its context (`{m = ?}` for an implicit argument, `?` for a `_`),
+  and the constraints on it.
+- An `[UnsolvedConstraints]` error without a location goes on the ranges Agda
+  highlights as `unsolvedconstraint`, one diagnostic each.
+- `src/protocol.rs` reads `Constraints` answers and the kind of a goal or
+  meta; the output file shows a `Constraints` answer as a list, for item 4.
+- The README has a section "Unsolved metas".
+
+---
+
+### 7. Checks and their results
+
+| Check | Result |
+| --- | --- |
+| Unit tests | 75 pass; 8 are new, in `src/metas.rs`: reading metas and their kinds, names and implicit arguments, following edits, keeping the metas Agda still lists, the innermost meta first, every kind of constraint the port prints, which constraints are on which meta, and the hover's text |
+| A new fixture, `tests/fixtures/Metas.agda`, with implicit arguments of a function and an operator, two `_`, a constraint stuck on one, a goal, and a `with` goal | Agda 2.8.0.2 reports the four metas expected, two on the `with` goal, and the `[UnsolvedConstraints]` error |
+| `explains_unsolved_metas`, end to end | the four warnings, their ranges and messages; none for the metas on the `with` goal; the error on `refl`; the hovers, with the name's hover below the meta's; metas following an edit, and going when one touches them; a filled `_` gone after a save |
+| `goal_types_follow_auto`, changed | `Depends.agda`'s `_B_11` is a warning before auto, and gone after auto solves it |
+| Mutation checks, each change undone in turn | no meta diagnostics: `explains_unsolved_metas` fails; no dropping of solved metas: `goal_types_follow_auto` fails; no constraints: fails at "Constraints on it:"; metas not following edits: fails at the hover after the edit; the error not placed: fails, the error at 0:0; metas on goals kept: fails with six warnings instead of four |
+| The full suite, outside the sandbox, on a clean checkout | 75 unit tests and 15 end-to-end tests pass; the first run found `goal_commands` waiting for six diagnostics and getting eight, which led to decision 3 |
+| `Judgement.lagda.typ` from `system-b-proofs`, on a copy | three warnings, `_m_304` on `ℂ`, `_360` on the `m` of `∀{… m …}` and `_m_388` on `⊢ᵇ`, each with its hover |
+| Clippy, rustfmt | no warnings; rustfmt only flags `src/highlight.rs`, unformatted before this work |
+
+`_360` in `Judgement.lagda.typ` is the type of a binder written without one,
+`m` in `∀{… m …}`. Its name doesn't say so, so its hover only says that Agda
+could not solve it; recognising a binder there is a possible next step.
+
+---
+
+### 8. Sources and how they were used
+
+| Source | What I took from it |
+| --- | --- |
+| Agda 2.8.0.2 on this machine, through `--interaction-json` | what Agda reports about metas and constraints, on the fixture, on `Depends.agda` before and after auto, after a `with`, and on `Judgement.lagda.typ` |
+| [agda/agda](https://github.com/agda/agda) at tag `v2.8.0`: `src/full/Agda/Interaction/JSONTop.hs`, `BasicOps.hs`, `Base.hs`, `InteractionTop.hs`, `src/data/emacs-mode/agda2-mode.el` | the JSON encoding of constraints and blockers, Agda's printer for them, that no command takes a meta, and what Emacs shows |
+| [banacorn/agda-mode-vscode](https://github.com/banacorn/agda-mode-vscode) and [willtunnels/agda2-vscode](https://github.com/willtunnels/agda2-vscode) | what the VS Code extensions show for metas and constraints |
+| This repository (`src/server.rs`, `render.rs`, `protocol.rs`, `links.rs`, `text.rs`, `tests/lsp.rs`) | where metas fit: the load, edits, goal commands, diagnostics and hover |
