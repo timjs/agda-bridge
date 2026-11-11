@@ -193,6 +193,13 @@ pub fn constraints(file: &Path) -> String {
     iotcm(file, "Cmd_constraints")
 }
 
+/// `ShowImplicitArgs <show>`: whether Agda shows implicit arguments in what
+/// it prints afterwards, as Emacs's `C-c C-x C-h` toggles it.
+pub fn show_implicit_args(file: &Path, show: bool) -> String {
+    let show = if show { "True" } else { "False" };
+    iotcm(file, &format!("ShowImplicitArgs {show}"))
+}
+
 /// `Cmd_solveAll AsIs`: the solutions of all goals that unification already
 /// found.
 pub fn solve_all(file: &Path) -> String {
@@ -250,6 +257,14 @@ mod tests {
         assert_eq!(solve_all(file), envelope("Cmd_solveAll AsIs"));
         assert_eq!(metas(file), envelope("Cmd_metas AsIs"));
         assert_eq!(constraints(file), envelope("Cmd_constraints"));
+        assert_eq!(
+            show_implicit_args(file, true),
+            envelope("ShowImplicitArgs True")
+        );
+        assert_eq!(
+            show_implicit_args(file, false),
+            envelope("ShowImplicitArgs False")
+        );
         assert_eq!(abort(file), envelope("Cmd_abort"));
         assert_eq!(
             goal_type_context_infer(file, 2, "n + n"),

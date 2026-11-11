@@ -1751,6 +1751,11 @@ fn goal_types_follow_auto() {
     );
     let hover = client.hover(&file_uri, position_of(&text, "{!  !}", 1));
     assert!(hover.contains("Goal: _"), "{hover}");
+    let hover = client.hover(&file_uri, position_of(&text, "const zero", 0));
+    assert!(
+        hover.contains("It also occurs:\n\n- as the type of goal `?1`"),
+        "{hover}"
+    );
 
     // Auto fills ?0 with `ℕ`, which Agda sends no new list of goals for;
     // the diagnostic and the hover of ?1 follow anyway, and the meta it
@@ -2219,16 +2224,31 @@ fn explains_unsolved_metas() {
         goals[0] == "?0 : ℕ" && goals[1].starts_with("?1 : _"),
         "{goals:?}"
     );
-    assert_eq!(messages(&diagnostics, 2).len(), 4, "{diagnostics:#?}");
-    // Where each meta starts, its length, and whether it is for the implicit
-    // argument `m`, or else for a `_`.
+    assert_eq!(messages(&diagnostics, 2).len(), 7, "{diagnostics:#?}");
+    // A binder without a type has two metas on it: its type, which the
+    // warning names as such, and that type's sort.
+    let on_k: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d["severity"] == 2 && d["range"]["start"] == at(&text, "∀ {k}", 3))
+        .map(|d| d["message"].as_str().unwrap())
+        .collect();
+    assert!(
+        on_k.len() == 2
+            && on_k.iter().any(|m| m.ends_with(", a sort"))
+            && on_k.iter().any(|m| m.ends_with(", the type of k")),
+        "{on_k:?}"
+    );
+
+    // Where each meta starts, its length, whether it is for the implicit
+    // argument `m`, or else for a `_`, and its type.
     let expected = [
-        (at(&text, "const (suc", 0), 5, true),
-        (at(&text, "⊕ zero", 0), 1, true),
-        (at(&text, "suc _", 4), 1, false),
-        (at(&text, "pred _ ≡", 5), 1, false),
+        (at(&text, "const (suc", 0), 5, true, "ℕ"),
+        (at(&text, "⊕ zero", 0), 1, true, "ℕ"),
+        (at(&text, "suc _", 4), 1, false, "ℕ"),
+        (at(&text, "pred _ ≡", 5), 1, false, "ℕ"),
+        (at(&text, "six = _", 6), 1, false, "zero ≡ zero"),
     ];
-    for (start, length, implicit) in expected {
+    for (start, length, implicit, ty) in expected {
         let warning = diagnostics
             .iter()
             .find(|d| d["severity"] == 2 && d["range"]["start"] == start)
@@ -2243,11 +2263,11 @@ fn explains_unsolved_metas() {
         let form = match implicit {
             true => {
                 message.starts_with("Unsolved meta _m_")
-                    && message.ends_with(" : ℕ, the implicit argument m")
+                    && message.ends_with(&format!(" : {ty}, the implicit argument m"))
             }
             false => {
                 message.starts_with("Unsolved meta _")
-                    && message.ends_with(" : ℕ")
+                    && message.ends_with(&format!(" : {ty}"))
                     && !message.contains("implicit")
             }
         };
@@ -2295,6 +2315,36 @@ fn explains_unsolved_metas() {
         hover.contains("write `?` in its place") && !hover.contains("Constraints"),
         "{hover}"
     );
+    // For a binder, what to write; for its type's sort, that it is the type
+    // of the other meta.
+    let hover = client.hover(&file_uri, at(&text, "∀ {k}", 3));
+    assert!(
+        hover.contains("Agda could not infer the type of `k`. Write it, as in `{k : …}`.")
+            && hover.contains("It also occurs:\n\n- as the type of `_"),
+        "{hover}"
+    );
+    // With implicit arguments, when Agda prints the meta differently then.
+    let hover = client.hover(&file_uri, at(&text, "six = _", 6));
+    assert!(
+        hover.contains("zero ≡ zero\n```")
+            && hover.contains("With implicit arguments:\n\n```agda\n")
+            && hover.contains(" : _≡_ {ℕ} zero zero\n```"),
+        "{hover}"
+    );
+    assert!(
+        !client
+            .hover(&file_uri, at(&text, "suc _", 4))
+            .contains("implicit arguments:")
+    );
+
+    // Agda shows implicit arguments again only when the file asks for it:
+    // the type of `refl`, here `_x_46 ≡ _x_46`, comes without them.
+    let hover = client.hover(&file_uri, at(&text, "stuck = refl", 8));
+    assert!(
+        hover.contains("refl : _") && hover.contains(" ≡ _") && !hover.contains("_≡_ {"),
+        "{hover}"
+    );
+
     // Elsewhere, no meta.
     assert!(
         !client
@@ -2327,13 +2377,35 @@ fn explains_unsolved_metas() {
         "textDocument/didSave",
         json!({ "textDocument": { "uri": file_uri } }),
     );
-    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 2).len() == 3);
+    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 2).len() == 6);
     assert!(
         diagnostics
             .iter()
             .all(|d| d["range"]["start"] != at(&text, "suc zero", 4)),
         "{diagnostics:#?}"
     );
+
+    // A file that shows implicit arguments itself keeps them: the meta is
+    // printed with them, so nothing is added, and `refl`'s type has them.
+    let shown = root.join("Shown.agda");
+    let shown_uri = uri(&shown);
+    let shown_text = "{-# OPTIONS --show-implicit #-}\nmodule Shown where\n\n\
+                      data ℕ : Set where\n  zero : ℕ\n\n\
+                      data _≡_ {A : Set} (x : A) : A → Set where\n  refl : x ≡ x\n\n\
+                      seven : zero ≡ zero\nseven = _\n";
+    std::fs::write(&shown, shown_text).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": shown_uri, "languageId": "agda", "version": 1, "text": shown_text } }),
+    );
+    client.diagnostics(&shown_uri, |d| messages(d, 2).len() == 1);
+    let hover = client.hover(&shown_uri, at(shown_text, "seven = _", 8));
+    assert!(
+        hover.contains(" : _≡_ {ℕ} zero zero\n```") && !hover.contains("With implicit arguments"),
+        "{hover}"
+    );
+    let hover = client.hover(&shown_uri, at(shown_text, "refl : x", 0));
+    assert!(hover.contains("refl : _≡_ {"), "{hover}");
 
     client.request("shutdown", Value::Null);
     client.notify("exit", Value::Null);

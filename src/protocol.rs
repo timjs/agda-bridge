@@ -84,7 +84,11 @@ pub enum Response {
     },
     /// The answer to a command stopped with `Cmd_abort`, before its prompt.
     DoneAborting,
-    /// Everything else, such as `Status`, `RunningInfo` and `JumpToError`.
+    /// Agda's display settings, after every command.
+    Status {
+        status: Status,
+    },
+    /// Everything else, such as `RunningInfo` and `JumpToError`.
     #[serde(other)]
     Other,
 }
@@ -92,6 +96,16 @@ pub enum Response {
 /// Parse one line of Agda output.
 pub fn parse_line(line: &str) -> Result<Response, serde_json::Error> {
     serde_json::from_str(line)
+}
+
+/// The part of Agda's `Status` the bridge reads: whether Agda shows implicit
+/// arguments, by the user's command or a file's `--show-implicit`; not known
+/// when an Agda leaves it out.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    #[serde(default)]
+    pub show_implicit_arguments: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -366,8 +380,25 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
 
+        // As Agda 2.8.0.2 sends it, and shortened.
+        let status = r#"{"kind":"Status","status":{"checked":false,"showImplicitArguments":true,"showIrrelevantArguments":false}}"#;
+        assert!(matches!(
+            parse_line(status).unwrap(),
+            Response::Status {
+                status: Status {
+                    show_implicit_arguments: Some(true)
+                }
+            }
+        ));
         let status = r#"{"kind":"Status","status":{"checked":false}}"#;
-        assert!(matches!(parse_line(status).unwrap(), Response::Other));
+        assert!(matches!(
+            parse_line(status).unwrap(),
+            Response::Status {
+                status: Status {
+                    show_implicit_arguments: None
+                }
+            }
+        ));
         let aborted = r#"{"kind":"DoneAborting"}"#;
         assert!(matches!(
             parse_line(aborted).unwrap(),

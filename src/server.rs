@@ -109,9 +109,9 @@ struct Document {
     links: Vec<Link>,
     /// The metas Agda could not solve, from the last load.
     metas: Vec<Meta>,
-    /// The constraints Agda could not solve, as objects, asked after a load
-    /// that left metas, for hover on those.
-    constraints: Vec<Value>,
+    /// What Agda says about the metas after a load or goal command that left
+    /// some, for hover on them.
+    meta_answers: MetaAnswers,
     /// Agda's highlighting from the last load, for semantic tokens.
     spans: Vec<Span>,
     /// Errors and warnings from the last load, as diagnostics.
@@ -237,6 +237,18 @@ pub struct Bridge {
     stopper: Mutex<Option<Stopper>>,
 }
 
+/// What Agda says about the unsolved metas, asked after a command that left
+/// some: the constraints, and both again with implicit arguments shown.
+#[derive(Debug, Clone, Default)]
+struct MetaAnswers {
+    /// The constraints Agda could not solve, as objects.
+    constraints: Vec<Value>,
+    /// The metas as Agda prints them with implicit arguments, by name.
+    implicit: HashMap<String, String>,
+    /// The constraints, as objects, with implicit arguments.
+    implicit_constraints: Vec<Value>,
+}
+
 /// Everything one Agda command answered, sorted by purpose.
 #[derive(Default)]
 struct Outcome {
@@ -249,6 +261,10 @@ struct Outcome {
     invisible_goals: Vec<OutputConstraint>,
     /// The constraints Agda could not solve, from `Cmd_constraints`.
     constraints: Option<Vec<Value>>,
+    /// Whether Agda shows implicit arguments, from its last `Status`.
+    show_implicit: Option<bool>,
+    /// What Agda says about the metas, asked after the command.
+    meta_answers: Option<MetaAnswers>,
     errors: Vec<String>,
     warnings: Vec<String>,
     give: Option<(u32, GiveResult)>,
@@ -334,6 +350,9 @@ impl Outcome {
                         .extend(info.into_iter().flat_map(|info| info.payload));
                 }
                 Response::DoneAborting => outcome.aborted = true,
+                Response::Status { status } => {
+                    outcome.show_implicit = status.show_implicit_arguments.or(outcome.show_implicit)
+                }
                 Response::Other => {}
             }
         }
@@ -650,7 +669,7 @@ impl Bridge {
             session.current_file = Some(path.to_path_buf());
             session.helper_made = false;
         }
-        let constraints = self.constraints(&mut guard, path, &outcome).await;
+        let meta_answers = self.meta_answers(&mut guard, path, &outcome).await;
         drop(guard);
 
         // Agda's ranges refer to the snapshot; move them to the current text.
@@ -679,6 +698,24 @@ impl Bridge {
                 .iter()
                 .any(|goal| goal.start <= meta.start && meta.end <= goal.end)
         });
+        // A meta on a variable where it is bound, as `m` in `∀ {m} → …`, is
+        // the type of that variable, which Agda could not infer.
+        for meta in &mut metas {
+            let binds = links.iter().any(|link| {
+                link.local
+                    && (link.start, link.end) == (meta.start, meta.end)
+                    && link.target == Target::Here(link.start)
+            });
+            if binds && matches!(meta.kind, metas::Kind::OfType(_)) {
+                meta.binder = Some(
+                    snapshot
+                        .chars()
+                        .skip(meta.start)
+                        .take(meta.end - meta.start)
+                        .collect(),
+                );
+            }
+        }
         // Agda names the file by its real path, which differs when the path
         // has a symbolic link (on macOS `/tmp` is `/private/tmp`).
         let file = match path.canonicalize() {
@@ -741,7 +778,7 @@ impl Bridge {
             document.goals = goals;
             document.links = links;
             document.metas = metas;
-            document.constraints = constraints;
+            document.meta_answers = meta_answers;
             document.spans = spans;
             document.goal_types = outcome.goal_types.clone();
             document.problems = problems;
@@ -773,22 +810,45 @@ impl Bridge {
         })
     }
 
-    /// The constraints Agda could not solve, when `outcome` left unsolved
-    /// metas, for hover on those; none otherwise, or when Agda fails to
-    /// answer, which only leaves the hover without them.
-    async fn constraints(
+    /// What Agda says about the metas `outcome` left, for hover on them: the
+    /// constraints, and, when Agda does not show implicit arguments already,
+    /// the metas and constraints again with them, after which Agda goes back
+    /// to not showing them. Each answer takes Agda about a millisecond. None
+    /// when there are no metas; what Agda fails to answer is left out, which
+    /// only leaves the hover without it.
+    async fn meta_answers(
         &self,
         guard: &mut MutexGuard<'_, Option<Session>>,
         path: &Path,
         outcome: &Outcome,
-    ) -> Vec<Value> {
+    ) -> MetaAnswers {
         if outcome.invisible_goals.is_empty() {
-            return Vec::new();
+            return MetaAnswers::default();
         }
-        match self.run(guard, &iotcm::constraints(path)).await {
-            Ok(responses) => Outcome::collect(responses).constraints.unwrap_or_default(),
-            Err(_) => Vec::new(),
+        let mut answers = MetaAnswers::default();
+        let constraints = |responses: Result<Vec<Response>, String>| {
+            responses
+                .ok()
+                .and_then(|responses| Outcome::collect(responses).constraints)
+                .unwrap_or_default()
+        };
+        answers.constraints = constraints(self.run(guard, &iotcm::constraints(path)).await);
+        if outcome.show_implicit == Some(false)
+            && self
+                .run(guard, &iotcm::show_implicit_args(path, true))
+                .await
+                .is_ok()
+        {
+            if let Ok(responses) = self.run(guard, &iotcm::metas(path)).await {
+                answers.implicit = metas::labels(&Outcome::collect(responses).invisible_goals);
+            }
+            answers.implicit_constraints =
+                constraints(self.run(guard, &iotcm::constraints(path)).await);
+            let _ = self
+                .run(guard, &iotcm::show_implicit_args(path, false))
+                .await;
         }
+        answers
     }
 
     /// Goal type and context, rendered as Markdown, and, when the goal has
@@ -1038,7 +1098,7 @@ impl Bridge {
             }
         }
         if outcome.give.is_some() && outcome.goals_listed {
-            outcome.constraints = Some(self.constraints(&mut guard, path, &outcome).await);
+            outcome.meta_answers = Some(self.meta_answers(&mut guard, path, &outcome).await);
         }
         drop(guard);
 
@@ -1113,7 +1173,7 @@ impl Bridge {
                 document.goal_types = outcome.goal_types.clone();
                 // Filling a goal can solve metas; Agda lists those left.
                 metas::keep_listed(&mut document.metas, &outcome.invisible_goals);
-                document.constraints = outcome.constraints.clone().unwrap_or_default();
+                document.meta_answers = outcome.meta_answers.clone().unwrap_or_default();
             } else {
                 document.goal_types.remove(&given);
             }
@@ -2073,11 +2133,30 @@ impl LanguageServer for Backend {
                                     .skip(meta.start)
                                     .take(meta.end - meta.start)
                                     .collect();
+                                let answers = &document.meta_answers;
                                 let constraints =
-                                    metas::constraints_on(meta, &document.constraints, &names);
-                                metas::hover(meta, &source, &constraints)
-                                    .trim_end()
-                                    .to_string()
+                                    metas::constraints_on(meta, &answers.constraints, &names);
+                                let implicit_constraints = metas::constraints_on(
+                                    meta,
+                                    &answers.implicit_constraints,
+                                    &names,
+                                );
+                                let details = metas::Details {
+                                    source,
+                                    implicit: answers
+                                        .implicit
+                                        .get(&meta.name)
+                                        .filter(|implicit| **implicit != meta.label())
+                                        .cloned(),
+                                    implicit_constraints: match implicit_constraints == constraints
+                                    {
+                                        true => Vec::new(),
+                                        false => implicit_constraints,
+                                    },
+                                    constraints,
+                                    uses: metas::uses(meta, &document.metas, &document.goal_types),
+                                };
+                                metas::hover(meta, &details).trim_end().to_string()
                             })
                             .collect();
                         let range = range_of(&document.text, innermost.start, innermost.end);

@@ -41,3 +41,11 @@ held = {!  !}
 four : ℕ → ℕ
 four n with {!  !}
 ... | w = n
+
+-- A binder whose type nothing determines: its type and that type's sort.
+five : ∀ {k} → ℕ
+five = zero
+
+-- An underscore whose type has an implicit argument, hidden by default.
+six : zero ≡ zero
+six = _

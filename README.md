@@ -155,7 +155,8 @@ determines or a `_` in your code, has a yellow background (with semantic
 tokens on), and is a diagnostic of the severity "warning" on the code it is
 about, such as `Unsolved meta _m_304 : ℕ, the implicit argument m`. Agda names
 a meta for an implicit argument after that argument, and puts it on the name
-of the function. The warnings move along with your typing until the next
+of the function. A variable bound without a type, as `m` in `∀ {m} → …`, gets
+one for its type, `Unsolved meta _360 : Set, the type of m`. The warnings move along with your typing until the next
 save, and filling a goal drops those it solved. A meta on a goal is left out:
 it is the goal's own type, or that type's sort, which Agda doesn't know yet,
 as for the goal in `with {!  !}`; the goal shows it, as in `?2 : _15`, and
@@ -167,11 +168,24 @@ between goals above, with `"severity": "warning"`. Warnings from Agda itself,
 such as an unreachable clause, have that severity too.
 
 Hover on a meta explains it, above the usual hover on the name under the
-cursor: its name and type, and how to see its context, which Agda only gives
-for goals. For an implicit argument, that is to give the argument as a goal,
-`{m = ?}`, for an operator in prefix form; for a `_`, to write `?` in its
-place. The hover also shows the constraints stuck on the meta, as Agda prints
-them for Emacs, such as `pred _27 = zero : ℕ (blocked on _27)`.
+cursor, with everything Agda says about it:
+
+- the meta as Agda prints it, and again with implicit arguments shown when
+  that differs, as `_≡_ {ℕ} zero zero` for `zero ≡ zero`;
+- what it is and how to see its context, which Agda only gives for goals: for
+  an implicit argument, give the argument as a goal, `{m = ?}`, for an
+  operator in prefix form; for a variable bound without a type, write its
+  type, as in `{m : …}`; for a `_`, write `?` in its place;
+- where else it occurs: as or in the type of a goal or of another meta, as
+  when goal `?1` has the meta as its type;
+- the constraints stuck on it, as Agda prints them for Emacs, such as
+  `pred _27 = zero : ℕ (blocked on _27)`, and again with implicit arguments
+  when that differs.
+
+For the versions with implicit arguments, the bridge asks Agda after a load
+that left metas, with implicit arguments switched on for that moment only;
+that takes Agda about a millisecond. A file with `--show-implicit` shows them
+throughout, so it needs no second version.
 
 When constraints stay unsolved, Agda also reports an error, "Failed to solve
 the following constraints", without a location. The bridge puts it on the

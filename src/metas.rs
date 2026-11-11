@@ -1,9 +1,11 @@
 //! Unsolved metas: what Agda could not solve and did not make a goal, such as
 //! an implicit argument nothing determines, or a `_` in the source. After a
 //! load Agda lists them as `invisibleGoals`, with a name, a type and a range,
-//! as it lists goals; a meta that is itself a type or a sort has no type. The bridge keeps them like goals and names, moving them
-//! along with edits, so that they can be diagnostics and be explained in
-//! hover, with the constraints that are stuck on them.
+//! as it lists goals; a meta that is itself a type or a sort has no type. The
+//! bridge keeps them like goals and names, moving them along with edits, so
+//! that they can be diagnostics and be explained in hover, with what Agda
+//! knows about them: the constraints stuck on them, and how they look with
+//! implicit arguments shown.
 
 use std::collections::{HashMap, HashSet};
 
@@ -20,6 +22,9 @@ pub struct Meta {
     pub kind: Kind,
     pub start: usize,
     pub end: usize,
+    /// The variable this meta is the type of, when Agda could not infer the
+    /// type of a binder, as `m` in `∀ {m} → …`.
+    pub binder: Option<String>,
 }
 
 /// What Agda says a meta is: a term of a type, or itself a type or a sort,
@@ -58,11 +63,7 @@ impl Meta {
     /// The meta as Agda prints it in its list of goals: `_15 : ℕ`, or
     /// `Type _3` and `Sort _4` for a meta that is a type or a sort.
     pub fn label(&self) -> String {
-        match &self.kind {
-            Kind::OfType(ty) => format!("{} : {ty}", self.name),
-            Kind::Type => format!("Type {}", self.name),
-            Kind::Sort => format!("Sort {}", self.name),
-        }
+        label(&self.name, &self.kind)
     }
 
     /// The meta as a diagnostic says it.
@@ -72,11 +73,40 @@ impl Meta {
             Kind::Type => format!("Unsolved meta {}, a type", self.name),
             Kind::Sort => format!("Unsolved meta {}, a sort", self.name),
         };
-        match self.argument() {
-            Some(argument) => format!("{meta}, the implicit argument {argument}"),
-            None => meta,
+        match (self.argument(), &self.binder) {
+            (Some(argument), _) => format!("{meta}, the implicit argument {argument}"),
+            (None, Some(binder)) => format!("{meta}, the type of {binder}"),
+            (None, None) => meta,
         }
     }
+}
+
+/// A meta as Agda prints it in its list of goals.
+fn label(name: &str, kind: &Kind) -> String {
+    match kind {
+        Kind::OfType(ty) => format!("{name} : {ty}"),
+        Kind::Type => format!("Type {name}"),
+        Kind::Sort => format!("Sort {name}"),
+    }
+}
+
+/// The metas Agda listed, by name, as Agda printed them: for the answer
+/// with implicit arguments shown.
+pub fn labels(listed: &[OutputConstraint]) -> HashMap<String, String> {
+    listed
+        .iter()
+        .filter_map(|goal| {
+            let name = goal.constraint_obj.get("name")?.as_str()?;
+            Some((name.to_string(), label(name, &Kind::of(goal))))
+        })
+        .collect()
+}
+
+/// Whether `text` has `name` as a word of its own, so that `_21` is not found
+/// in `_210`.
+fn mentions(text: &str, name: &str) -> bool {
+    text.split(|c: char| c.is_whitespace() || "(){}\";.@,[]".contains(c))
+        .any(|word| word == name)
 }
 
 /// The metas Agda listed after a load, with Agda's 1-based code point offsets
@@ -97,6 +127,7 @@ pub fn from_invisible_goals(goals: &[OutputConstraint]) -> Vec<Meta> {
                 kind: Kind::of(goal),
                 start: position("start")?,
                 end: position("end")?,
+                binder: None,
             })
         })
         .collect()
@@ -124,34 +155,113 @@ pub fn metas_under(metas: &[Meta], offset: usize) -> Vec<&Meta> {
     found
 }
 
-/// Hover on a meta: its name and type, how to see its context, and the
-/// `constraints` on it. `source` is the text of its range.
-pub fn hover(meta: &Meta, source: &str, constraints: &[String]) -> String {
-    let mut out = format!(
-        "**Unsolved meta `{}`**\n\n```agda\n{}\n```\n\n",
-        meta.name,
-        meta.label()
-    );
-    out.push_str(&match (meta.argument(), source) {
-        (Some(argument), _) => format!(
-            "Agda could not infer the implicit argument `{argument}`. To see its \
+/// What hover says about a meta besides the meta itself.
+#[derive(Debug, Default)]
+pub struct Details {
+    /// The text of the meta's range.
+    pub source: String,
+    /// The meta as Agda prints it with implicit arguments shown, when that
+    /// differs from [`Meta::label`].
+    pub implicit: Option<String>,
+    /// The constraints on it, as [`constraints_on`] gives them.
+    pub constraints: Vec<String>,
+    /// The same with implicit arguments shown, when that differs.
+    pub implicit_constraints: Vec<String>,
+    /// Where else it occurs, as [`uses`] gives it.
+    pub uses: Vec<String>,
+}
+
+/// Hover on a meta: the meta as Agda prints it, and with implicit arguments;
+/// what it is and how to see its context; where else it occurs; and the
+/// constraints on it, also with implicit arguments.
+pub fn hover(meta: &Meta, details: &Details) -> String {
+    let mut out = format!("**Unsolved meta `{}`**\n\n", meta.name);
+    code(&mut out, None, std::slice::from_ref(&meta.label()));
+    if let Some(implicit) = &details.implicit {
+        code(
+            &mut out,
+            Some("With implicit arguments:"),
+            std::slice::from_ref(implicit),
+        );
+    }
+    out.push_str(
+        &match (meta.argument(), &meta.binder, details.source.as_str()) {
+            (Some(argument), _, _) => format!(
+                "Agda could not infer the implicit argument `{argument}`. To see its \
              context, make it a goal: give the argument as `{{{argument} = ?}}`, \
              for an operator in prefix form.\n"
-        ),
-        (None, "_") => "Agda could not solve this `_`. To see its context, make it a \
-                        goal: write `?` in its place.\n"
-            .to_string(),
-        (None, _) => "Agda could not solve this meta.\n".to_string(),
-    });
-    if !constraints.is_empty() {
-        out.push_str("\nConstraints on it:\n\n```agda\n");
-        for constraint in constraints {
-            out.push_str(constraint);
-            out.push('\n');
+            ),
+            (None, Some(binder), _) => format!(
+                "Agda could not infer the type of `{binder}`. Write it, as in \
+             `{{{binder} : …}}`.\n"
+            ),
+            (None, None, "_") => "Agda could not solve this `_`. To see its context, make \
+                              it a goal: write `?` in its place.\n"
+                .to_string(),
+            (None, None, _) => "Agda could not solve this meta.\n".to_string(),
+        },
+    );
+    if !details.uses.is_empty() {
+        out.push_str("\nIt also occurs:\n\n");
+        for place in &details.uses {
+            out.push_str(&format!("- {place}\n"));
         }
-        out.push_str("```\n");
+    }
+    if !details.constraints.is_empty() {
+        out.push('\n');
+        code(&mut out, Some("Constraints on it:"), &details.constraints);
+        if !details.implicit_constraints.is_empty() {
+            code(
+                &mut out,
+                Some("With implicit arguments:"),
+                &details.implicit_constraints,
+            );
+        }
     }
     out
+}
+
+/// An ```agda block with `lines`, after `title` when there is one.
+fn code(out: &mut String, title: Option<&str>, lines: &[String]) {
+    if let Some(title) = title {
+        out.push_str(title);
+        out.push_str("\n\n");
+    }
+    out.push_str("```agda\n");
+    for line in lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("```\n\n");
+}
+
+/// Where else `meta` occurs: as or in the type of a goal, from
+/// `goal_types`, or of one of the other `metas`.
+pub fn uses(meta: &Meta, metas: &[Meta], goal_types: &HashMap<u32, String>) -> Vec<String> {
+    let role = |ty: &str, what: String| {
+        if ty.trim() == meta.name {
+            Some(format!("as the type of {what}"))
+        } else if mentions(ty, &meta.name) {
+            Some(format!("in the type of {what}"))
+        } else {
+            None
+        }
+    };
+    let mut goals: Vec<(&u32, &String)> = goal_types.iter().collect();
+    goals.sort();
+    let in_goals = goals
+        .into_iter()
+        .filter_map(|(id, ty)| role(ty, format!("goal `?{id}`")));
+    let in_metas = metas
+        .iter()
+        .filter(|other| other.name != meta.name)
+        .filter_map(|other| match &other.kind {
+            Kind::OfType(ty) => role(ty, format!("`{}`", other.name)),
+            _ => None,
+        });
+    let mut found: Vec<String> = in_goals.chain(in_metas).collect();
+    found.dedup();
+    found
 }
 
 /// The names of `metas` by number, so that a constraint blocked on meta 12
@@ -172,10 +282,7 @@ pub fn constraints_on(meta: &Meta, forms: &[Value], names: &HashMap<u64, String>
         .filter_map(|form| {
             let text = constraint_text(form, names);
             let blocked = number.is_some_and(|number| blocked_on(form.get("unblocker"), number));
-            let mentioned = text
-                .split(|c: char| c.is_whitespace() || "(){}\";.@,[]".contains(c))
-                .any(|word| word == meta.name);
-            (blocked || mentioned).then_some(text)
+            (blocked || mentions(&text, &meta.name)).then_some(text)
         })
         .collect()
 }
@@ -443,6 +550,7 @@ mod tests {
             kind: Kind::OfType("ℕ".into()),
             start,
             end,
+            binder: None,
         }
     }
 
@@ -502,6 +610,12 @@ mod tests {
             "Unsolved meta _m_15 : ℕ, the implicit argument m"
         );
         assert_eq!(meta("_18", 0, 1).message(), "Unsolved meta _18 : ℕ");
+        let binder = Meta {
+            binder: Some("m".into()),
+            kind: Kind::OfType("Set".into()),
+            ..meta("_360", 0, 1)
+        };
+        assert_eq!(binder.message(), "Unsolved meta _360 : Set, the type of m");
     }
 
     #[test]
@@ -682,16 +796,95 @@ mod tests {
 
     #[test]
     fn explains_a_meta_in_hover() {
-        let text = hover(&meta("_m_15", 0, 5), "const", &[]);
+        let details = |source: &str| Details {
+            source: source.into(),
+            ..Details::default()
+        };
+        let text = hover(&meta("_m_15", 0, 5), &details("const"));
         assert!(text.starts_with("**Unsolved meta `_m_15`**\n\n```agda\n_m_15 : ℕ\n```\n"));
-        assert!(text.contains("the implicit argument `m`"));
-        assert!(text.contains("`{m = ?}`"));
-        assert!(!text.contains("Constraints"));
-        let text = hover(&meta("_21", 0, 1), "_", &["pred _21 = zero : ℕ".into()]);
-        assert!(text.contains("write `?` in its place"));
-        assert!(text.ends_with("Constraints on it:\n\n```agda\npred _21 = zero : ℕ\n```\n"));
-        let text = hover(&meta("_7", 0, 1), "m", &[]);
-        assert!(text.contains("Agda could not solve this meta.\n"));
+        assert!(text.contains("the implicit argument `m`") && text.contains("`{m = ?}`"));
+        assert!(!text.contains("Constraints") && !text.contains("implicit arguments:"));
+        let binder = Meta {
+            binder: Some("m".into()),
+            ..meta("_360", 0, 1)
+        };
+        assert!(
+            hover(&binder, &details("m")).contains("the type of `m`. Write it, as in `{m : …}`.")
+        );
+        assert!(
+            hover(&meta("_7", 0, 1), &details("m")).contains("Agda could not solve this meta.\n")
+        );
+        // Everything there is to say.
+        let text = hover(
+            &meta("_21", 0, 1),
+            &Details {
+                source: "_".into(),
+                implicit: Some("_21 : _≡_ {ℕ} zero zero".into()),
+                constraints: vec!["pred _21 = zero : ℕ".into()],
+                implicit_constraints: vec!["pred {x} _21 = zero : ℕ".into()],
+                uses: vec!["as the type of goal `?1`".into()],
+            },
+        );
+        assert_eq!(
+            text,
+            "**Unsolved meta `_21`**\n\n```agda\n_21 : ℕ\n```\n\n\
+             With implicit arguments:\n\n```agda\n_21 : _≡_ {ℕ} zero zero\n```\n\n\
+             Agda could not solve this `_`. To see its context, make it a goal: write `?` \
+             in its place.\n\
+             \nIt also occurs:\n\n- as the type of goal `?1`\n\
+             \nConstraints on it:\n\n```agda\npred _21 = zero : ℕ\n```\n\n\
+             With implicit arguments:\n\n```agda\npred {x} _21 = zero : ℕ\n```\n\n"
+        );
+    }
+
+    #[test]
+    fn finds_where_else_a_meta_occurs() {
+        let b = meta("_B_11", 0, 1);
+        let others = [
+            b.clone(),
+            Meta {
+                kind: Kind::OfType("_B_11 → ℕ".into()),
+                ..meta("_15", 2, 3)
+            },
+            Meta {
+                kind: Kind::OfType("_B_110".into()),
+                ..meta("_16", 4, 5)
+            },
+            Meta {
+                kind: Kind::Sort,
+                ..meta("_17", 6, 7)
+            },
+        ];
+        let goal_types = HashMap::from([
+            (2, "Vec _B_11 n".to_string()),
+            (1, "_B_11".to_string()),
+            (0, "ℕ".to_string()),
+        ]);
+        assert_eq!(
+            uses(&b, &others, &goal_types),
+            [
+                "as the type of goal `?1`",
+                "in the type of goal `?2`",
+                "in the type of `_15`"
+            ]
+        );
+    }
+
+    #[test]
+    fn reads_metas_as_agda_prints_them() {
+        let listed: Vec<OutputConstraint> = serde_json::from_value(serde_json::json!([
+            { "constraintObj": { "name": "_17", "range": [] }, "kind": "OfType",
+              "type": "_≡_ {ℕ} zero zero" },
+            { "constraintObj": { "name": "_10", "range": [] }, "kind": "JustSort" },
+        ]))
+        .unwrap();
+        assert_eq!(
+            labels(&listed),
+            HashMap::from([
+                ("_17".to_string(), "_17 : _≡_ {ℕ} zero zero".to_string()),
+                ("_10".to_string(), "Sort _10".to_string()),
+            ])
+        );
     }
 
     #[test]
