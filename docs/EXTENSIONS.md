@@ -547,7 +547,8 @@ a constraint stuck on an underscore (`stuck : pred _ ≡ zero`,
 3. **Locations in the output file:** a list of metas of its own, with a
    location after each, as in Emacs.
 4. **Code actions "Show constraints" and "Show implicit arguments",** as
-   Emacs's `C-c C-=` and `C-c C-x C-h`.
+   Emacs's `C-c C-=` and `C-c C-x C-h`. Dropped for metas, see decision 6:
+   their hover shows both.
 5. **A code action "Make goal" on a meta:** `?` in place of `_`, and
    `{m = ?}` after the name of a function applied in prefix form; not for
    operators.
@@ -555,7 +556,8 @@ a constraint stuck on an underscore (`stuck : pred _ ≡ zero`,
    `[UnsolvedConstraints]` error without a location goes on the ranges Agda
    highlights as `unsolvedconstraint`, instead of at line 1, column 1.
 
-Built on this branch: 1, 2 and 6, see section 6. Next: 4, then 5, and 3.
+Built on this branch: 1, 2 and 6, see section 6; item 1 then grew to
+include what item 4 would have shown about a meta. Next: 5, and 3.
 
 ---
 
@@ -576,6 +578,15 @@ Built on this branch: 1, 2 and 6, see section 6. Next: 4, then 5, and 3.
 5. **A constraint is on a meta** when it is blocked on it, or mentions it.
    Constraints name metas by number, `_304`; the bridge uses the names the
    diagnostics use, `_m_304`.
+6. **Everything in the hover, no code actions.** Asked to show as much as
+   possible in a meta's hover without extra code actions, if that doesn't
+   take long, the bridge adds what Agda says with implicit arguments shown,
+   what a binder's meta is, and where else a meta occurs. Asking Agda with
+   implicit arguments takes four more commands after a load that left metas,
+   each about a millisecond, also on `Judgement.lagda.typ`, which takes 5.9
+   seconds to load. Normal forms are left out: Agda already gives a meta's
+   type reduced (`_ : F zero` comes as `ℕ`), so `Cmd_metas Normalised` gave
+   the same types, on the fixture and on `Judgement.lagda.typ`.
 
 ---
 
@@ -596,8 +607,19 @@ On branch `unsolved-metas`:
   `OutputConstraint`, for every kind in Agda 2.8.0's JSON encoding; a kind it
   doesn't know is shown as Agda's JSON.
 - Hover on a meta shows, above the usual hover: the meta as Agda prints it,
-  how to see its context (`{m = ?}` for an implicit argument, `?` for a `_`),
-  and the constraints on it.
+  and with implicit arguments when that differs; how to see its context
+  (`{m = ?}` for an implicit argument, `?` for a `_`), or, for the type of a
+  variable bound without one, to write it; where else it occurs, as or in the
+  type of a goal or another meta; and the constraints on it, also with
+  implicit arguments when that differs.
+- For the versions with implicit arguments, the bridge sends
+  `ShowImplicitArgs True`, `Cmd_metas AsIs` and `Cmd_constraints`, and
+  `ShowImplicitArgs False`, after a load or goal command that left metas. It
+  does so only when Agda's `Status` says implicit arguments are off: a file
+  with `--show-implicit` keeps them on, and needs no second version.
+- A meta on a variable where it is bound, which Agda highlights as a bound
+  name whose definition is itself, is that variable's type; its warning says
+  so, as `Unsolved meta _360 : Set, the type of m`.
 - An `[UnsolvedConstraints]` error without a location goes on the ranges Agda
   highlights as `unsolvedconstraint`, one diagnostic each.
 - `src/protocol.rs` reads `Constraints` answers and the kind of a goal or
@@ -610,18 +632,31 @@ On branch `unsolved-metas`:
 
 | Check | Result |
 | --- | --- |
-| Unit tests | 75 pass; 8 are new, in `src/metas.rs`: reading metas and their kinds, names and implicit arguments, following edits, keeping the metas Agda still lists, the innermost meta first, every kind of constraint the port prints, which constraints are on which meta, and the hover's text |
+| Unit tests | 77 pass; 10 are new, in `src/metas.rs`: reading metas and their kinds, names and implicit arguments, following edits, keeping the metas Agda still lists, the innermost meta first, every kind of constraint the port prints, which constraints are on which meta, the hover's text with all its parts, where else a meta occurs, and metas as Agda prints them; `src/protocol.rs` also reads Agda's `Status`, with and without `showImplicitArguments` |
 | A new fixture, `tests/fixtures/Metas.agda`, with implicit arguments of a function and an operator, two `_`, a constraint stuck on one, a goal, and a `with` goal | Agda 2.8.0.2 reports the four metas expected, two on the `with` goal, and the `[UnsolvedConstraints]` error |
 | `explains_unsolved_metas`, end to end | the four warnings, their ranges and messages; none for the metas on the `with` goal; the error on `refl`; the hovers, with the name's hover below the meta's; metas following an edit, and going when one touches them; a filled `_` gone after a save |
-| `goal_types_follow_auto`, changed | `Depends.agda`'s `_B_11` is a warning before auto, and gone after auto solves it |
-| Mutation checks, each change undone in turn | no meta diagnostics: `explains_unsolved_metas` fails; no dropping of solved metas: `goal_types_follow_auto` fails; no constraints: fails at "Constraints on it:"; metas not following edits: fails at the hover after the edit; the error not placed: fails, the error at 0:0; metas on goals kept: fails with six warnings instead of four |
-| The full suite, outside the sandbox, on a clean checkout | 75 unit tests and 15 end-to-end tests pass; the first run found `goal_commands` waiting for six diagnostics and getting eight, which led to decision 3 |
-| `Judgement.lagda.typ` from `system-b-proofs`, on a copy | three warnings, `_m_304` on `ℂ`, `_360` on the `m` of `∀{… m …}` and `_m_388` on `⊢ᵇ`, each with its hover |
+| `explains_unsolved_metas`, second round, with a binder without a type and a `_` of type `zero ≡ zero` added | the binder's two warnings, its type's named `the type of k`; the binder hover; the sort's hover saying it is the type of the other meta; `_≡_ {ℕ} zero zero` with implicit arguments; Agda without implicit arguments afterwards; a file with `--show-implicit` keeping them |
+| `goal_types_follow_auto`, changed | `Depends.agda`'s `_B_11` is a warning before auto, its hover says it is the type of goal `?1`, and it is gone after auto solves it |
+| Mutation checks, each change undone in turn | no meta diagnostics: `explains_unsolved_metas` fails; no dropping of solved metas: `goal_types_follow_auto` fails; no constraints: fails at "Constraints on it:"; metas not following edits: fails at the hover after the edit; the error not placed: fails, the error at 0:0; metas on goals kept: fails with six warnings instead of four; implicit arguments not switched off again: fails at the type of `refl`; switched off in a file with `--show-implicit`: fails there; no binders: fails at the warnings on `k`; no uses: fails at the binder's hover |
+| The full suite, outside the sandbox, on a clean checkout | 77 unit tests and 15 end-to-end tests pass; the first run, before the second round, found `goal_commands` waiting for six diagnostics and getting eight, which led to decision 3 |
+| `Judgement.lagda.typ` from `system-b-proofs`, on a copy | three warnings, `_m_304` on `ℂ`, `_360 : Set, the type of m` on the `m` of `∀{… m …}`, and `_m_388` on `⊢ᵇ`, each with its hover; their types are the same with implicit arguments, and no constraints are on them |
 | Clippy, rustfmt | no warnings; rustfmt only flags `src/highlight.rs`, unformatted before this work |
 
-`_360` in `Judgement.lagda.typ` is the type of a binder written without one,
-`m` in `∀{… m …}`. Its name doesn't say so, so its hover only says that Agda
-could not solve it; recognising a binder there is a possible next step.
+#### Goals
+
+A goal's hover shows Emacs's `C-c C-,` (and `C-c C-.` when the goal has
+text): the goal's type, simplified as Emacs asks; `Have:`, the type of the
+goal's text; a cubical boundary; the context, with `(not in scope)` marks;
+and the constraints that mention the goal, which Agda sends as text
+(`outputForms`). So "Show constraints" is there for goals already, limited to
+those that mention the goal. Two things could be added:
+
+- Agda's text for those constraints carries internal detail, as in
+  `pred ?0 = zero : ℕ\n  (blocked on _13@14553810981960600810, belongs to
+  problem 20)`, where the number after `@` is a module's hash.
+- Implicit arguments are hidden: `y ≡ x` is `_≡_ {A} y x` with them, in the
+  goal's type and its context. Showing them takes two more Agda commands per
+  goal hover, around the one the hover asks.
 
 ---
 
