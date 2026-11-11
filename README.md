@@ -148,6 +148,21 @@ vim or Helix mode, `[ g` and `] g` are free for that; add this to your keymap
 Without vim or Helix mode, drop the `vim_mode` part of the context and pick
 other keys.
 
+## Unsolved metas
+
+A meta Agda could not solve, such as an implicit argument that nothing
+determines or a `_` in your code, has a yellow background (with semantic
+tokens on), and is a diagnostic of the severity "warning" on the code it is
+about, such as `Unsolved meta _m_304 : ℕ, the implicit argument m`. Agda names
+a meta for an implicit argument after that argument, and puts it on the name
+of the function. The warnings move along with your typing until the next
+save, and filling a goal drops those it solved.
+
+So they are in Zed's project diagnostics (`cmd-shift-m` on macOS,
+`ctrl-shift-m` on Linux), and the diagnostic jumps can move between them, as
+between goals above, with `"severity": "warning"`. Warnings from Agda itself,
+such as an unreachable clause, have that severity too.
+
 ## Renaming
 
 Renaming is not a code action: Zed only lets a language server answer its own

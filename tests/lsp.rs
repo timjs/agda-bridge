@@ -1734,18 +1734,27 @@ fn goal_types_follow_auto() {
         "textDocument/didOpen",
         json!({ "textDocument": { "uri": file_uri, "languageId": "agda", "version": 1, "text": text } }),
     );
-    // The type of ?1 is a meta that ?0 will solve, such as `_B_11`.
-    let diagnostics = client.diagnostics(&file_uri, |d| d.len() == 2);
+    // The type of ?1 is a meta that ?0 will solve, such as `_B_11`, the
+    // implicit argument `B` of `const`, which is a warning until then.
+    let diagnostics = client.diagnostics(&file_uri, |d| d.len() == 3);
     let goals = messages(&diagnostics, 3);
     assert!(
         goals[0] == "?0 : Set" && goals[1].starts_with("?1 : _"),
         "{goals:?}"
     );
+    let unsolved = messages(&diagnostics, 2);
+    assert!(
+        unsolved.len() == 1
+            && unsolved[0].starts_with("Unsolved meta _B_")
+            && unsolved[0].ends_with(" : Set, the implicit argument B"),
+        "{unsolved:?}"
+    );
     let hover = client.hover(&file_uri, position_of(&text, "{!  !}", 1));
     assert!(hover.contains("Goal: _"), "{hover}");
 
     // Auto fills ?0 with `ℕ`, which Agda sends no new list of goals for;
-    // the diagnostic and the hover of ?1 follow anyway.
+    // the diagnostic and the hover of ?1 follow anyway, and the meta it
+    // solved is no longer a warning.
     client.received.clear();
     client.request(
         "workspace/executeCommand",
@@ -2169,6 +2178,93 @@ fn works_in_literate_typst() {
     assert!(
         text.contains("\ndouble : ℕ → ℕ\ndouble n = {!  !}\n```\n\nIn words"),
         "{text}"
+    );
+
+    client.request("shutdown", Value::Null);
+    client.notify("exit", Value::Null);
+    let _ = client.child.wait();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn explains_unsolved_metas() {
+    let Some(agda) = find_agda() else {
+        eprintln!("skipping: no Agda found (set $AGDA or put agda on PATH)");
+        return;
+    };
+    let root = setup("metas", &["Metas.agda"]);
+    let mut client = Client::start(&root.join("bridge.sock"));
+    client.initialize(&root, &agda);
+    let file = root.join("Metas.agda");
+    let file_uri = uri(&file);
+    let mut text = std::fs::read_to_string(&file).unwrap();
+    client.notify(
+        "textDocument/didOpen",
+        json!({ "textDocument": { "uri": file_uri, "languageId": "agda", "version": 1, "text": text } }),
+    );
+    // The position `skip` UTF-16 units into the first match of `needle`.
+    let at = |text: &str, needle: &str, skip: u64| {
+        let mut position = position_of(text, needle, 0);
+        position["character"] = json!(position["character"].as_u64().unwrap() + skip);
+        position
+    };
+
+    // Every unsolved meta is a warning on its range; the goal stays the only
+    // information. Agda's numbers for the metas vary, so only their form is
+    // checked.
+    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 2).len() == 4);
+    assert_eq!(messages(&diagnostics, 3), ["?0 : ℕ"]);
+    // Where each meta starts, its length, and whether it is for the implicit
+    // argument `m`, or else for a `_`.
+    let expected = [
+        (at(&text, "const (suc", 0), 5, true),
+        (at(&text, "⊕ zero", 0), 1, true),
+        (at(&text, "suc _", 4), 1, false),
+        (at(&text, "pred _ ≡", 5), 1, false),
+    ];
+    for (start, length, implicit) in expected {
+        let warning = diagnostics
+            .iter()
+            .find(|d| d["severity"] == 2 && d["range"]["start"] == start)
+            .unwrap_or_else(|| panic!("no warning at {start}: {diagnostics:#?}"));
+        let end = &warning["range"]["end"];
+        assert_eq!(end["line"], start["line"]);
+        assert_eq!(
+            end["character"].as_u64().unwrap(),
+            start["character"].as_u64().unwrap() + length
+        );
+        let message = warning["message"].as_str().unwrap();
+        let form = match implicit {
+            true => {
+                message.starts_with("Unsolved meta _m_")
+                    && message.ends_with(" : ℕ, the implicit argument m")
+            }
+            false => {
+                message.starts_with("Unsolved meta _")
+                    && message.ends_with(" : ℕ")
+                    && !message.contains("implicit")
+            }
+        };
+        assert!(form, "{message}");
+    }
+
+    // Filling the `_` of `three` and saving leaves three metas.
+    text = text.replace("three n = suc _", "three n = suc zero");
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": file_uri, "version": 2 }, "contentChanges": [{ "text": text }] }),
+    );
+    std::fs::write(&file, &text).unwrap();
+    client.notify(
+        "textDocument/didSave",
+        json!({ "textDocument": { "uri": file_uri } }),
+    );
+    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 2).len() == 3);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|d| d["range"]["start"] != at(&text, "suc zero", 4)),
+        "{diagnostics:#?}"
     );
 
     client.request("shutdown", Value::Null);

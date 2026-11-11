@@ -18,10 +18,11 @@ use crate::agda::{Agda, Stop, Stopper};
 use crate::goals::{self, GOAL_MARKER, Goal};
 use crate::highlight::{self, Span};
 use crate::links::{self, Link, Target};
+use crate::metas::{self, Meta};
 use crate::output::Output;
 use crate::protocol::{
     DisplayInfo, GiveResult, GoalInfo, HighlightingEntry, InteractionPoint, MakeCaseVariant,
-    Response, Solution, message_text,
+    OutputConstraint, Response, Solution, message_text,
 };
 use crate::settings::Settings;
 use crate::text::{self, Change};
@@ -106,6 +107,8 @@ struct Document {
     goal_types: HashMap<u32, String>,
     /// Names and their definitions, from the last load's highlighting.
     links: Vec<Link>,
+    /// The metas Agda could not solve, from the last load.
+    metas: Vec<Meta>,
     /// Agda's highlighting from the last load, for semantic tokens.
     spans: Vec<Span>,
     /// Errors and warnings from the last load, as diagnostics.
@@ -148,6 +151,7 @@ impl Document {
         let old_text = std::mem::replace(&mut self.text, new_text);
         goals::adjust(&mut self.goals, &old_text, &change);
         links::adjust(&mut self.links, &change);
+        metas::adjust(&mut self.metas, &change);
         if stretch {
             highlight::adjust_stretching(&mut self.spans, &change);
         } else {
@@ -238,6 +242,8 @@ struct Outcome {
     /// Whether Agda listed all goals, and so their types; give does, auto
     /// does not.
     goals_listed: bool,
+    /// The unsolved metas Agda listed with the goals.
+    invisible_goals: Vec<OutputConstraint>,
     errors: Vec<String>,
     warnings: Vec<String>,
     give: Option<(u32, GiveResult)>,
@@ -278,11 +284,12 @@ impl Outcome {
                     match DisplayInfo::parse(&info) {
                         DisplayInfo::AllGoalsWarnings {
                             visible_goals,
+                            invisible_goals,
                             warnings,
                             errors,
-                            ..
                         } => {
                             outcome.goals_listed = true;
+                            outcome.invisible_goals = invisible_goals;
                             for goal in &visible_goals {
                                 if let (Some(id), Some(ty)) = (goal.goal_id(), &goal.ty) {
                                     outcome.goal_types.insert(id, ty.clone());
@@ -640,6 +647,7 @@ impl Bridge {
             .collect();
         let mut links = links::from_highlighting(&outcome.highlighting, path);
         let mut spans = highlight::from_highlighting(&outcome.highlighting);
+        let mut metas = metas::from_invisible_goals(&outcome.invisible_goals);
         // Agda names the file by its real path, which differs when the path
         // has a symbolic link (on macOS `/tmp` is `/private/tmp`).
         let file = match path.canonicalize() {
@@ -676,10 +684,12 @@ impl Bridge {
             if let Some(change) = text::single_change(&snapshot, &document.text) {
                 goals::adjust(&mut goals, &snapshot, &change);
                 links::adjust(&mut links, &change);
+                metas::adjust(&mut metas, &change);
                 highlight::adjust(&mut spans, &change);
             }
             document.goals = goals;
             document.links = links;
+            document.metas = metas;
             document.spans = spans;
             document.goal_types = outcome.goal_types.clone();
             document.problems = problems;
@@ -953,6 +963,7 @@ impl Bridge {
             let goals = Outcome::collect(self.run(&mut guard, &iotcm::metas(path)).await?);
             if goals.goals_listed {
                 outcome.goal_types = goals.goal_types;
+                outcome.invisible_goals = goals.invisible_goals;
                 outcome.goals_listed = true;
             }
         }
@@ -1027,6 +1038,8 @@ impl Bridge {
             }
             if outcome.goals_listed {
                 document.goal_types = outcome.goal_types.clone();
+                // Filling a goal can solve metas; Agda lists those left.
+                metas::keep_listed(&mut document.metas, &outcome.invisible_goals);
             } else {
                 document.goal_types.remove(&given);
             }
@@ -1372,6 +1385,15 @@ impl Bridge {
                     message: format!("?{} : {ty}", goal.id),
                     ..Diagnostic::default()
                 }
+            }));
+            // Unsolved metas as warnings: goals stay the only information,
+            // so jumps between information diagnostics still find goals only.
+            diagnostics.extend(document.metas.iter().map(|meta| Diagnostic {
+                range: range_of(&document.text, meta.start, meta.end),
+                severity: Some(DiagnosticSeverity::WARNING),
+                source: Some("agda".into()),
+                message: meta.message(),
+                ..Diagnostic::default()
             }));
             diagnostics
         };
@@ -1847,6 +1869,7 @@ impl LanguageServer for Backend {
         if let Some(edit) = text::single_change(&document.text, &change.text) {
             goals::adjust(&mut document.goals, &document.text, &edit);
             links::adjust(&mut document.links, &edit);
+            metas::adjust(&mut document.metas, &edit);
             highlight::adjust(&mut document.spans, &edit);
         }
         document.text = change.text;
