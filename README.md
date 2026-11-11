@@ -204,12 +204,44 @@ next character, a space or `-`, closes it again.
 
 ## Literate Agda
 
-Agda checks literate files, such as `.lagda.md` and `.lagda.typ`, itself, so
-loading, goals, hover and the goal commands work in them as in `.agda` files.
-For `.lagda.md` and `.lagda.typ`, the bridge also knows which parts are code,
-by Agda's own rules: "Make clause", helper functions and symbol completion
-never touch the prose. The zed-agda extension highlights `.lagda.typ` files as
-Typst, with the Agda blocks as Agda; see its README.
+Agda checks literate files, such as `.lagda.md` and `.lagda.typ`, itself. The
+bridge passes Agda the file's path, unchanged, so loading, goals, errors,
+highlighting, hover and the goal commands work in them as in `.agda` files.
+The zed-agda extension highlights `.lagda.typ` files as Typst, with the Agda
+blocks as Agda; see its README.
+
+### The code-only copy of a literate file
+
+A few features don't ask Agda but read the text of the file themselves. In a
+literate file, that text is mostly prose, so the bridge makes a copy for them,
+in [`src/literate.rs`](src/literate.rs): every character outside Agda code
+becomes a space, while line breaks stay, so every position in the copy is the
+same position in the file. This follows Agda's own rules, ported from Agda
+2.8.0's `Agda.Syntax.Parser.Literate`, which also decide which blocks count as
+code: ```` ```agda ```` and bare ```` ``` ```` blocks are code, blocks in
+another language are not. Agda never sees this copy.
+
+The features that read the copy, and what goes wrong without it:
+
+| Feature | Without the copy |
+| --- | --- |
+| "Make clause", the code action and the command | a prose line that reads like a type signature gets the action |
+| Placing a helper function, for "Make helper function" | the helper can land in the prose between two blocks, where Agda doesn't see it |
+| Symbol completion, such as `\to` for `→` | prose gets completions too |
+| Renaming: the search for files that import the module | prose that mentions an import counts as one |
+
+Renaming also needs the module name without the whole extension, `Nat` for
+`Nat.lagda.typ`, not `Nat.lagda`, or it never finds the files that import a
+literate module. This is not part of the copy, but of `module_name` in
+[`src/server.rs`](src/server.rs).
+
+Case split and with-abstraction read the document itself. They only work on a
+goal's own line, and Agda only puts goals in code.
+
+The copy covers `.lagda.md` and `.lagda.typ`. For the other literate formats,
+`.lagda`, `.lagda.tex`, `.lagda.rst`, `.lagda.org` and `.lagda.tree`, Agda's
+rules are not ported yet, so these features read the whole file there, prose
+included.
 
 ## Debugging
 
