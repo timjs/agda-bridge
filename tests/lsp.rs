@@ -2209,11 +2209,17 @@ fn explains_unsolved_metas() {
         position
     };
 
-    // Every unsolved meta is a warning on its range; the goal stays the only
-    // information. Agda's numbers for the metas vary, so only their form is
-    // checked.
-    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 2).len() == 4);
-    assert_eq!(messages(&diagnostics, 3), ["?0 : ℕ"]);
+    // Every unsolved meta is a warning on its range; the goals stay the only
+    // information. The type of the `with` goal, and its sort, are metas on
+    // that goal, which are left out: the goal shows its type. Agda's numbers
+    // for the metas vary, so only their form is checked.
+    let diagnostics = client.diagnostics(&file_uri, |d| messages(d, 3).len() == 2);
+    let goals = messages(&diagnostics, 3);
+    assert!(
+        goals[0] == "?0 : ℕ" && goals[1].starts_with("?1 : _"),
+        "{goals:?}"
+    );
+    assert_eq!(messages(&diagnostics, 2).len(), 4, "{diagnostics:#?}");
     // Where each meta starts, its length, and whether it is for the implicit
     // argument `m`, or else for a `_`.
     let expected = [

@@ -211,6 +211,10 @@ impl DisplayInfo {
 #[serde(rename_all = "camelCase")]
 pub struct OutputConstraint {
     pub constraint_obj: Value,
+    /// `OfType` for a goal or meta with a type, `JustType` or `JustSort`
+    /// for one that is itself a type or a sort.
+    #[serde(default)]
+    pub kind: String,
     #[serde(rename = "type")]
     pub ty: Option<String>,
 }

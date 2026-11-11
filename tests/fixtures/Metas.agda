@@ -35,3 +35,9 @@ stuck = refl
 -- A goal, which is not an unsolved meta.
 held : ℕ
 held = {!  !}
+
+-- A goal whose type Agda does not know yet: that type and its sort are
+-- metas on the goal, which the goal itself shows.
+four : ℕ → ℕ
+four n with {!  !}
+... | w = n

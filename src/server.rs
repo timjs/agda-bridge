@@ -669,7 +669,16 @@ impl Bridge {
             .collect();
         let mut links = links::from_highlighting(&outcome.highlighting, path);
         let mut spans = highlight::from_highlighting(&outcome.highlighting);
+        // A meta on a goal is the goal's own type, or that type's sort, which
+        // Agda does not know yet, as for `with {!  !}`: the goal shows it, and
+        // filling the goal solves it. Agda never checks a goal's text, so a
+        // meta within a goal is always such a one.
         let mut metas = metas::from_invisible_goals(&outcome.invisible_goals);
+        metas.retain(|meta| {
+            !goals
+                .iter()
+                .any(|goal| goal.start <= meta.start && meta.end <= goal.end)
+        });
         // Agda names the file by its real path, which differs when the path
         // has a symbolic link (on macOS `/tmp` is `/private/tmp`).
         let file = match path.canonicalize() {

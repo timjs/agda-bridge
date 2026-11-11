@@ -156,7 +156,10 @@ tokens on), and is a diagnostic of the severity "warning" on the code it is
 about, such as `Unsolved meta _m_304 : ℕ, the implicit argument m`. Agda names
 a meta for an implicit argument after that argument, and puts it on the name
 of the function. The warnings move along with your typing until the next
-save, and filling a goal drops those it solved.
+save, and filling a goal drops those it solved. A meta on a goal is left out:
+it is the goal's own type, or that type's sort, which Agda doesn't know yet,
+as for the goal in `with {!  !}`; the goal shows it, as in `?2 : _15`, and
+filling the goal solves it.
 
 So they are in Zed's project diagnostics (`cmd-shift-m` on macOS,
 `ctrl-shift-m` on Linux), and the diagnostic jumps can move between them, as

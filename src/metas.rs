@@ -1,7 +1,7 @@
 //! Unsolved metas: what Agda could not solve and did not make a goal, such as
 //! an implicit argument nothing determines, or a `_` in the source. After a
 //! load Agda lists them as `invisibleGoals`, with a name, a type and a range,
-//! as it lists goals. The bridge keeps them like goals and names, moving them
+//! as it lists goals; a meta that is itself a type or a sort has no type. The bridge keeps them like goals and names, moving them
 //! along with edits, so that they can be diagnostics and be explained in
 //! hover, with the constraints that are stuck on them.
 
@@ -17,9 +17,28 @@ use crate::text::Change;
 pub struct Meta {
     /// Agda's name for it: `_12`, or `_m_12` for an implicit argument `m`.
     pub name: String,
-    pub ty: String,
+    pub kind: Kind,
     pub start: usize,
     pub end: usize,
+}
+
+/// What Agda says a meta is: a term of a type, or itself a type or a sort,
+/// as `OfType`, `JustType` and `JustSort` in its answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    OfType(String),
+    Type,
+    Sort,
+}
+
+impl Kind {
+    fn of(goal: &OutputConstraint) -> Kind {
+        match (goal.kind.as_str(), &goal.ty) {
+            ("JustType", _) => Kind::Type,
+            ("JustSort", _) => Kind::Sort,
+            (_, ty) => Kind::OfType(ty.clone().unwrap_or_else(|| "_".into())),
+        }
+    }
 }
 
 impl Meta {
@@ -36,9 +55,23 @@ impl Meta {
         (!argument.is_empty() && number.parse::<u64>().is_ok()).then_some(argument)
     }
 
+    /// The meta as Agda prints it in its list of goals: `_15 : ℕ`, or
+    /// `Type _3` and `Sort _4` for a meta that is a type or a sort.
+    pub fn label(&self) -> String {
+        match &self.kind {
+            Kind::OfType(ty) => format!("{} : {ty}", self.name),
+            Kind::Type => format!("Type {}", self.name),
+            Kind::Sort => format!("Sort {}", self.name),
+        }
+    }
+
     /// The meta as a diagnostic says it.
     pub fn message(&self) -> String {
-        let meta = format!("Unsolved meta {} : {}", self.name, self.ty);
+        let meta = match &self.kind {
+            Kind::OfType(ty) => format!("Unsolved meta {} : {ty}", self.name),
+            Kind::Type => format!("Unsolved meta {}, a type", self.name),
+            Kind::Sort => format!("Unsolved meta {}, a sort", self.name),
+        };
         match self.argument() {
             Some(argument) => format!("{meta}, the implicit argument {argument}"),
             None => meta,
@@ -61,7 +94,7 @@ pub fn from_invisible_goals(goals: &[OutputConstraint]) -> Vec<Meta> {
             };
             Some(Meta {
                 name,
-                ty: goal.ty.clone().unwrap_or_else(|| "_".into()),
+                kind: Kind::of(goal),
                 start: position("start")?,
                 end: position("end")?,
             })
@@ -95,8 +128,9 @@ pub fn metas_under(metas: &[Meta], offset: usize) -> Vec<&Meta> {
 /// `constraints` on it. `source` is the text of its range.
 pub fn hover(meta: &Meta, source: &str, constraints: &[String]) -> String {
     let mut out = format!(
-        "**Unsolved meta `{}`**\n\n```agda\n{} : {}\n```\n\n",
-        meta.name, meta.name, meta.ty
+        "**Unsolved meta `{}`**\n\n```agda\n{}\n```\n\n",
+        meta.name,
+        meta.label()
     );
     out.push_str(&match (meta.argument(), source) {
         (Some(argument), _) => format!(
@@ -369,18 +403,18 @@ fn blocker_name(blocker: &Value, names: &HashMap<u64, String>) -> String {
 /// since: so the bridge keeps its own ranges, and only drops the metas the
 /// command solved. Metas the command made appear at the next load.
 pub fn keep_listed(metas: &mut Vec<Meta>, listed: &[OutputConstraint]) {
-    let types: Vec<(String, Option<String>)> = listed
+    let kinds: Vec<(String, Kind)> = listed
         .iter()
         .filter_map(|goal| {
             let name = goal.constraint_obj.get("name")?.as_str()?;
-            Some((name.to_string(), goal.ty.clone()))
+            Some((name.to_string(), Kind::of(goal)))
         })
         .collect();
-    let names: HashSet<&str> = types.iter().map(|(name, _)| name.as_str()).collect();
+    let names: HashSet<&str> = kinds.iter().map(|(name, _)| name.as_str()).collect();
     metas.retain(|meta| names.contains(meta.name.as_str()));
     for meta in metas.iter_mut() {
-        if let Some((_, Some(ty))) = types.iter().find(|(name, _)| *name == meta.name) {
-            meta.ty = ty.clone();
+        if let Some((_, kind)) = kinds.iter().find(|(name, _)| *name == meta.name) {
+            meta.kind = kind.clone();
         }
     }
 }
@@ -406,7 +440,7 @@ mod tests {
     fn meta(name: &str, start: usize, end: usize) -> Meta {
         Meta {
             name: name.into(),
-            ty: "ℕ".into(),
+            kind: Kind::OfType("ℕ".into()),
             start,
             end,
         }
@@ -421,16 +455,30 @@ mod tests {
         assert_eq!(
             from_invisible_goals(&listed),
             [
+                meta("_m_15", 215, 220),
                 Meta {
-                    ty: "ℕ".into(),
-                    ..meta("_m_15", 215, 220)
-                },
-                Meta {
-                    ty: "Set".into(),
+                    kind: Kind::OfType("Set".into()),
                     ..meta("_18", 299, 300)
                 },
             ]
         );
+        // A meta that is a type or a sort has no type, as Agda 2.8.0.2
+        // sends for the type of a `with` goal and its sort.
+        let sort: OutputConstraint = serde_json::from_value(serde_json::json!({
+            "constraintObj": { "name": "_14", "range": [{ "start": { "pos": 7 }, "end": { "pos": 13 } }] },
+            "kind": "JustSort",
+        }))
+        .unwrap();
+        let read = from_invisible_goals(&[sort]);
+        assert_eq!(
+            read,
+            [Meta {
+                kind: Kind::Sort,
+                ..meta("_14", 6, 12)
+            }]
+        );
+        assert_eq!(read[0].label(), "Sort _14");
+        assert_eq!(read[0].message(), "Unsolved meta _14, a sort");
         // A meta without a range is left out.
         let rangeless: OutputConstraint = serde_json::from_value(serde_json::json!({
             "constraintObj": { "name": "_3", "range": [] },
@@ -634,9 +682,7 @@ mod tests {
 
     #[test]
     fn explains_a_meta_in_hover() {
-        let mut implicit = meta("_m_15", 0, 5);
-        implicit.ty = "ℕ".into();
-        let text = hover(&implicit, "const", &[]);
+        let text = hover(&meta("_m_15", 0, 5), "const", &[]);
         assert!(text.starts_with("**Unsolved meta `_m_15`**\n\n```agda\n_m_15 : ℕ\n```\n"));
         assert!(text.contains("the implicit argument `m`"));
         assert!(text.contains("`{m = ?}`"));
@@ -655,7 +701,7 @@ mod tests {
         assert_eq!(
             metas,
             [Meta {
-                ty: "Set".into(),
+                kind: Kind::OfType("Set".into()),
                 ..meta("_B_2", 20, 21)
             }]
         );
