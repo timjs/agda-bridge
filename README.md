@@ -170,6 +170,10 @@ for goals. For an implicit argument, that is to give the argument as a goal,
 place. The hover also shows the constraints stuck on the meta, as Agda prints
 them for Emacs, such as `pred _27 = zero : ℕ (blocked on _27)`.
 
+When constraints stay unsolved, Agda also reports an error, "Failed to solve
+the following constraints", without a location. The bridge puts it on the
+code Agda highlights for it, instead of at the start of the file.
+
 ## Renaming
 
 Renaming is not a code action: Zed only lets a language server answer its own

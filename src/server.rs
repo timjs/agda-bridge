@@ -392,6 +392,19 @@ fn range_of(text: &str, start: usize, end: usize) -> Range {
     Range::new(text::position_of(text, start), text::position_of(text, end))
 }
 
+/// The ranges Agda's highlighting marks as `unsolvedconstraint`, as 0-based
+/// char offsets, each once, in order.
+fn stuck_constraints(highlighting: &[HighlightingEntry]) -> Vec<(usize, usize)> {
+    let mut ranges: Vec<(usize, usize)> = highlighting
+        .iter()
+        .filter(|entry| entry.atoms.iter().any(|atom| atom == "unsolvedconstraint"))
+        .map(|entry| (entry.range[0] - 1, entry.range[1] - 1))
+        .collect();
+    ranges.sort_unstable();
+    ranges.dedup();
+    ranges
+}
+
 fn problem(text: &str, file: &str, message: &str, severity: DiagnosticSeverity) -> Diagnostic {
     let range = match location::span_in_file(message, file) {
         Some(span) => range_of(
@@ -671,16 +684,36 @@ impl Bridge {
             }
             _ => path.to_string_lossy().into_owned(),
         };
+        // Agda reports constraints it could not solve without a location;
+        // such a problem goes on the code Agda highlights as a stuck
+        // constraint, instead of at the start of the file.
+        let stuck = stuck_constraints(&outcome.highlighting);
+        let place = |message: &String, severity| -> Vec<Diagnostic> {
+            let diagnostic = problem(&snapshot, &file, message, severity);
+            let unplaced = location::span_in_file(message, &file).is_none();
+            let constraints = message.contains("[UnsolvedConstraints]")
+                || message.contains("Failed to solve the following constraints");
+            match unplaced && constraints && !stuck.is_empty() {
+                true => stuck
+                    .iter()
+                    .map(|&(start, end)| Diagnostic {
+                        range: range_of(&snapshot, start, end),
+                        ..diagnostic.clone()
+                    })
+                    .collect(),
+                false => vec![diagnostic],
+            }
+        };
         let mut problems: Vec<Diagnostic> = outcome
             .errors
             .iter()
-            .map(|message| problem(&snapshot, &file, message, DiagnosticSeverity::ERROR))
+            .flat_map(|message| place(message, DiagnosticSeverity::ERROR))
             .collect();
         problems.extend(
             outcome
                 .warnings
                 .iter()
-                .map(|message| problem(&snapshot, &file, message, DiagnosticSeverity::WARNING)),
+                .flat_map(|message| place(message, DiagnosticSeverity::WARNING)),
         );
         let expansions = {
             let mut documents = self.documents.lock().unwrap();

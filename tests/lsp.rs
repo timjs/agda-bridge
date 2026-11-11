@@ -2248,6 +2248,22 @@ fn explains_unsolved_metas() {
         assert!(form, "{message}");
     }
 
+    // The constraint Agda could not solve is an error without a location in
+    // Agda's message; it goes on the code Agda highlights for it.
+    let errors: Vec<&Value> = diagnostics.iter().filter(|d| d["severity"] == 1).collect();
+    assert_eq!(errors.len(), 1, "{diagnostics:#?}");
+    let refl = at(&text, "stuck = refl", 8);
+    assert_eq!(errors[0]["range"]["start"], refl);
+    assert_eq!(
+        errors[0]["range"]["end"]["character"].as_u64().unwrap(),
+        refl["character"].as_u64().unwrap() + 4
+    );
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("error: [UnsolvedConstraints]") && message.contains("pred _"),
+        "{message}"
+    );
+
     // Hover on a meta explains it, before the usual hover on the name: for
     // an implicit argument, which one it is and how to make it a goal.
     let hover = client.hover(&file_uri, at(&text, "const (suc", 1));
