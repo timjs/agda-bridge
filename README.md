@@ -163,6 +163,13 @@ So they are in Zed's project diagnostics (`cmd-shift-m` on macOS,
 between goals above, with `"severity": "warning"`. Warnings from Agda itself,
 such as an unreachable clause, have that severity too.
 
+Hover on a meta explains it, above the usual hover on the name under the
+cursor: its name and type, and how to see its context, which Agda only gives
+for goals. For an implicit argument, that is to give the argument as a goal,
+`{m = ?}`, for an operator in prefix form; for a `_`, to write `?` in its
+place. The hover also shows the constraints stuck on the meta, as Agda prints
+them for Emacs, such as `pred _27 = zero : ℕ (blocked on _27)`.
+
 ## Renaming
 
 Renaming is not a code action: Zed only lets a language server answer its own

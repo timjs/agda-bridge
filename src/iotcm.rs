@@ -187,6 +187,12 @@ pub fn metas(file: &Path) -> String {
     iotcm(file, "Cmd_metas AsIs")
 }
 
+/// `Cmd_constraints`: the constraints Agda could not solve yet, as Emacs's
+/// "show constraints" asks for them; it takes no arguments in Agda 2.8.
+pub fn constraints(file: &Path) -> String {
+    iotcm(file, "Cmd_constraints")
+}
+
 /// `Cmd_solveAll AsIs`: the solutions of all goals that unification already
 /// found.
 pub fn solve_all(file: &Path) -> String {
@@ -243,6 +249,7 @@ mod tests {
         );
         assert_eq!(solve_all(file), envelope("Cmd_solveAll AsIs"));
         assert_eq!(metas(file), envelope("Cmd_metas AsIs"));
+        assert_eq!(constraints(file), envelope("Cmd_constraints"));
         assert_eq!(abort(file), envelope("Cmd_abort"));
         assert_eq!(
             goal_type_context_infer(file, 2, "n + n"),

@@ -2248,12 +2248,58 @@ fn explains_unsolved_metas() {
         assert!(form, "{message}");
     }
 
-    // Filling the `_` of `three` and saving leaves three metas.
-    text = text.replace("three n = suc _", "three n = suc zero");
+    // Hover on a meta explains it, before the usual hover on the name: for
+    // an implicit argument, which one it is and how to make it a goal.
+    let hover = client.hover(&file_uri, at(&text, "const (suc", 1));
+    let meta = hover.find("**Unsolved meta `_m_").expect(&hover);
+    let name = hover.find("const : {m : ℕ} → ℕ → ℕ").expect(&hover);
+    assert!(meta < name, "{hover}");
+    assert!(
+        hover.contains("the implicit argument `m`") && hover.contains("`{m = ?}`"),
+        "{hover}"
+    );
+    // For a `_`, how to make it a goal, and the constraints stuck on it, as
+    // Agda prints them.
+    let hover = client.hover(&file_uri, at(&text, "pred _ ≡", 5));
+    assert!(hover.contains("write `?` in its place"), "{hover}");
+    let constraints = hover.find("Constraints on it:").expect(&hover);
+    let stuck = &hover[constraints..];
+    assert!(
+        stuck.contains("pred _") && stuck.contains(" = zero : ℕ (blocked on _"),
+        "{hover}"
+    );
+    let hover = client.hover(&file_uri, at(&text, "suc _", 4));
+    assert!(
+        hover.contains("write `?` in its place") && !hover.contains("Constraints"),
+        "{hover}"
+    );
+    // Elsewhere, no meta.
+    assert!(
+        !client
+            .hover(&file_uri, at(&text, "pred _ ≡", 0))
+            .contains("Unsolved meta")
+    );
+
+    // The metas move with an edit before them; an edit on one removes it.
+    text = format!("-- A note.\n{text}");
     client.notify(
         "textDocument/didChange",
         json!({ "textDocument": { "uri": file_uri, "version": 2 }, "contentChanges": [{ "text": text }] }),
     );
+    let hover = client.hover(&file_uri, at(&text, "pred _ ≡", 5));
+    assert!(hover.contains("Constraints on it:"), "{hover}");
+    text = text.replace("three n = suc _", "three n = suc zero");
+    client.notify(
+        "textDocument/didChange",
+        json!({ "textDocument": { "uri": file_uri, "version": 3 }, "contentChanges": [{ "text": text }] }),
+    );
+    assert!(
+        !client
+            .hover(&file_uri, at(&text, "suc zero", 4))
+            .contains("Unsolved meta")
+    );
+
+    // Saving the filled `_` of `three` leaves three metas.
     std::fs::write(&file, &text).unwrap();
     client.notify(
         "textDocument/didSave",

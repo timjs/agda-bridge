@@ -194,6 +194,9 @@ pub enum DisplayInfo {
     /// How a name is in scope: as what, brought in by which `open` or
     /// definition, with locations.
     WhyInScope { message: String },
+    /// The constraints Agda could not solve yet, from `Cmd_constraints`, as
+    /// objects (see [`crate::metas::constraint_text`]).
+    Constraints { constraints: Vec<Value> },
     #[serde(other)]
     Other,
 }

@@ -109,6 +109,9 @@ struct Document {
     links: Vec<Link>,
     /// The metas Agda could not solve, from the last load.
     metas: Vec<Meta>,
+    /// The constraints Agda could not solve, as objects, asked after a load
+    /// that left metas, for hover on those.
+    constraints: Vec<Value>,
     /// Agda's highlighting from the last load, for semantic tokens.
     spans: Vec<Span>,
     /// Errors and warnings from the last load, as diagnostics.
@@ -244,6 +247,8 @@ struct Outcome {
     goals_listed: bool,
     /// The unsolved metas Agda listed with the goals.
     invisible_goals: Vec<OutputConstraint>,
+    /// The constraints Agda could not solve, from `Cmd_constraints`.
+    constraints: Option<Vec<Value>>,
     errors: Vec<String>,
     warnings: Vec<String>,
     give: Option<(u32, GiveResult)>,
@@ -316,6 +321,9 @@ impl Outcome {
                         DisplayInfo::Auto { info } => outcome.auto = Some(info),
                         DisplayInfo::InferredType { expr } => outcome.inferred = Some(expr),
                         DisplayInfo::WhyInScope { message } => outcome.why = Some(message),
+                        DisplayInfo::Constraints { constraints } => {
+                            outcome.constraints = Some(constraints)
+                        }
                         DisplayInfo::Other => {}
                     }
                     outcome.displays.push(info);
@@ -629,6 +637,7 @@ impl Bridge {
             session.current_file = Some(path.to_path_buf());
             session.helper_made = false;
         }
+        let constraints = self.constraints(&mut guard, path, &outcome).await;
         drop(guard);
 
         // Agda's ranges refer to the snapshot; move them to the current text.
@@ -690,6 +699,7 @@ impl Bridge {
             document.goals = goals;
             document.links = links;
             document.metas = metas;
+            document.constraints = constraints;
             document.spans = spans;
             document.goal_types = outcome.goal_types.clone();
             document.problems = problems;
@@ -719,6 +729,24 @@ impl Bridge {
             0 => format!("Loaded {name}: {goal_count} goal(s)."),
             n => format!("Loaded {name}: {n} error(s)."),
         })
+    }
+
+    /// The constraints Agda could not solve, when `outcome` left unsolved
+    /// metas, for hover on those; none otherwise, or when Agda fails to
+    /// answer, which only leaves the hover without them.
+    async fn constraints(
+        &self,
+        guard: &mut MutexGuard<'_, Option<Session>>,
+        path: &Path,
+        outcome: &Outcome,
+    ) -> Vec<Value> {
+        if outcome.invisible_goals.is_empty() {
+            return Vec::new();
+        }
+        match self.run(guard, &iotcm::constraints(path)).await {
+            Ok(responses) => Outcome::collect(responses).constraints.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Goal type and context, rendered as Markdown, and, when the goal has
@@ -967,6 +995,9 @@ impl Bridge {
                 outcome.goals_listed = true;
             }
         }
+        if outcome.give.is_some() && outcome.goals_listed {
+            outcome.constraints = Some(self.constraints(&mut guard, path, &outcome).await);
+        }
         drop(guard);
 
         let title = command.title();
@@ -1040,6 +1071,7 @@ impl Bridge {
                 document.goal_types = outcome.goal_types.clone();
                 // Filling a goal can solve metas; Agda lists those left.
                 metas::keep_listed(&mut document.metas, &outcome.invisible_goals);
+                document.constraints = outcome.constraints.clone().unwrap_or_default();
             } else {
                 document.goal_types.remove(&given);
             }
@@ -1476,17 +1508,19 @@ impl Bridge {
         }
     }
 
-    /// Hover outside goals, in this order: the type of the name under the
-    /// cursor (given as its range, its text and its definition site), how to
-    /// type the symbol under it (given as its range and the Markdown), and
-    /// why the name is in scope.
+    /// Hover outside goals, in this order: the unsolved metas under the
+    /// cursor (given as the range of the innermost and the Markdown of each),
+    /// the type of the name under it (given as its range, its text and its
+    /// definition site), how to type the symbol under it (given as its range
+    /// and the Markdown), and why the name is in scope.
     async fn hover_outside_goals(
         &self,
         path: &Path,
+        unsolved: Option<(Range, Vec<String>)>,
         name: Option<(Range, String, (PathBuf, usize))>,
         typing: Option<(Range, String)>,
     ) -> Option<Hover> {
-        let mut parts = Vec::new();
+        let (meta_range, mut parts) = unsolved.unwrap_or_default();
         let mut range = None;
         let mut scope = None;
         if let Some((name_range, occurrence, (site_path, site))) = name {
@@ -1504,6 +1538,10 @@ impl Bridge {
         if let Some((symbol_range, how)) = typing {
             parts.push(how);
             range = range.or(Some(symbol_range));
+        }
+        // The name or symbol, when there is one, is the smaller range.
+        if !parts.is_empty() {
+            range = range.or(Some(meta_range));
         }
         if let Some(why) = scope {
             parts.push(format!("```text\n{why}\n```"));
@@ -1979,6 +2017,30 @@ impl LanguageServer for Backend {
                 (Some(goal), _) => Ok((goal.id, range_of(&document.text, goal.start, goal.end))),
                 (None, None) => return Ok(None),
                 (None, Some(offset)) => {
+                    // The metas here, innermost first, and the range of the
+                    // innermost.
+                    let names = metas::names(&document.metas);
+                    let here = metas::metas_under(&document.metas, offset);
+                    let unsolved = here.first().map(|innermost| {
+                        let markdown: Vec<String> = here
+                            .iter()
+                            .map(|meta| {
+                                let source: String = document
+                                    .text
+                                    .chars()
+                                    .skip(meta.start)
+                                    .take(meta.end - meta.start)
+                                    .collect();
+                                let constraints =
+                                    metas::constraints_on(meta, &document.constraints, &names);
+                                metas::hover(meta, &source, &constraints)
+                                    .trim_end()
+                                    .to_string()
+                            })
+                            .collect();
+                        let range = range_of(&document.text, innermost.start, innermost.end);
+                        (range, markdown)
+                    });
                     let symbols = self.0.settings().symbols;
                     let typing = input::symbol_at(&document.text, offset).and_then(
                         |(start, end, symbol)| {
@@ -1998,14 +2060,17 @@ impl LanguageServer for Backend {
                             let range = range_of(&document.text, link.start, link.end);
                             (range, occurrence, self.0.definition_site(&path, link))
                         });
-                    Err((name, typing))
+                    Err((unsolved, name, typing))
                 }
             }
         };
         let (goal, range) = match found {
             Ok(goal) => goal,
-            Err((name, typing)) => {
-                return Ok(self.0.hover_outside_goals(&path, name, typing).await);
+            Err((unsolved, name, typing)) => {
+                return Ok(self
+                    .0
+                    .hover_outside_goals(&path, unsolved, name, typing)
+                    .await);
             }
         };
         let markdown = self

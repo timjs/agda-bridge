@@ -195,6 +195,21 @@ pub fn display_info(raw: &Value) -> String {
         DisplayInfo::Auto { info } => format!("## Auto\n\n{info}\n"),
         DisplayInfo::InferredType { expr } => format!("```agda\n{expr}\n```\n"),
         DisplayInfo::WhyInScope { message } => format!("```text\n{message}\n```\n"),
+        DisplayInfo::Constraints { constraints } => {
+            let mut out = String::new();
+            let none = std::collections::HashMap::new();
+            section(
+                &mut out,
+                "Constraints",
+                constraints
+                    .iter()
+                    .map(|form| crate::metas::constraint_text(form, &none)),
+            );
+            match out.is_empty() {
+                true => "No constraints.\n".to_string(),
+                false => out,
+            }
+        }
         DisplayInfo::Other => format!(
             "```json\n{}\n```\n",
             serde_json::to_string_pretty(raw).unwrap_or_default()
