@@ -557,7 +557,8 @@ a constraint stuck on an underscore (`stuck : pred _ ≡ zero`,
    highlights as `unsolvedconstraint`, instead of at line 1, column 1.
 
 Built on this branch: 1, 2 and 6, see section 6; item 1 then grew to
-include what item 4 would have shown about a meta. Next: 5, and 3.
+include what item 4 would have shown about a meta; then 3 and 5. For goals,
+what item 4 could add is a to-do in `tests/fixtures/TODO.md`.
 
 ---
 
@@ -624,6 +625,22 @@ On branch `unsolved-metas`:
   highlights as `unsolvedconstraint`, one diagnostic each.
 - `src/protocol.rs` reads `Constraints` answers and the kind of a goal or
   meta; the output file shows a `Constraints` answer as a list, for item 4.
+- The output file lists the metas under "Unsolved metas", as Emacs's
+  `*All Goals*`, each with its location as a link from the output file,
+  relative to its directory, such as
+  `[Metas.agda:22.7-12](../Metas.agda:22:7)`. Zed 1.23.2's Markdown preview
+  resolves such a link against the Markdown file's directory, normalising
+  `..` (`resolve_open_target` in `crates/workspace/src/path_link.rs`), and
+  opens the file at that line and column, which it counts in characters, as
+  Agda does (`point_from_external_input` in `crates/text/src/text.rs`).
+  Metas on a goal are left out, as in the diagnostics. The links point where
+  the metas were at the load.
+- The code action "Make goal of `_`" puts `{!  !}` in place of a `_`, and
+  "Make goal of implicit argument `m`" puts `{m = {!  !}}` after the name of
+  a function applied in prefix form; not after an operator applied infix,
+  which only the prefix form can give a named argument, nor for the type of
+  a binder. The edit is in the code action itself; Agda checks the goal at
+  the next save. "Open output file" is offered on every meta.
 - The README has a section "Unsolved metas".
 
 ---
@@ -632,14 +649,17 @@ On branch `unsolved-metas`:
 
 | Check | Result |
 | --- | --- |
+| Unit tests, after items 3 and 5 | 79 pass: links relative to the output file, also with `..` and percent-encoded characters, in `src/output.rs`; the list of metas with their locations, without those on a goal, in `src/render.rs` |
+| `explains_unsolved_metas`, items 3 and 5 | the output file lists seven metas, with the link for `const`, and none on the `with` goal; "Make goal" offered on `const` and a `_`, with their edits, not on `⊕` nor on a binder; after both edits and a save, two more goals and two fewer warnings |
+| Mutation checks, items 3 and 5 | metas on goals listed: fails at the count; no links: fails at the link; operators applied infix too: fails at `⊕` |
 | Unit tests | 77 pass; 10 are new, in `src/metas.rs`: reading metas and their kinds, names and implicit arguments, following edits, keeping the metas Agda still lists, the innermost meta first, every kind of constraint the port prints, which constraints are on which meta, the hover's text with all its parts, where else a meta occurs, and metas as Agda prints them; `src/protocol.rs` also reads Agda's `Status`, with and without `showImplicitArguments` |
 | A new fixture, `tests/fixtures/Metas.agda`, with implicit arguments of a function and an operator, two `_`, a constraint stuck on one, a goal, and a `with` goal | Agda 2.8.0.2 reports the four metas expected, two on the `with` goal, and the `[UnsolvedConstraints]` error |
 | `explains_unsolved_metas`, end to end | the four warnings, their ranges and messages; none for the metas on the `with` goal; the error on `refl`; the hovers, with the name's hover below the meta's; metas following an edit, and going when one touches them; a filled `_` gone after a save |
 | `explains_unsolved_metas`, second round, with a binder without a type and a `_` of type `zero ≡ zero` added | the binder's two warnings, its type's named `the type of k`; the binder hover; the sort's hover saying it is the type of the other meta; `_≡_ {ℕ} zero zero` with implicit arguments; Agda without implicit arguments afterwards; a file with `--show-implicit` keeping them |
 | `goal_types_follow_auto`, changed | `Depends.agda`'s `_B_11` is a warning before auto, its hover says it is the type of goal `?1`, and it is gone after auto solves it |
 | Mutation checks, each change undone in turn | no meta diagnostics: `explains_unsolved_metas` fails; no dropping of solved metas: `goal_types_follow_auto` fails; no constraints: fails at "Constraints on it:"; metas not following edits: fails at the hover after the edit; the error not placed: fails, the error at 0:0; metas on goals kept: fails with six warnings instead of four; implicit arguments not switched off again: fails at the type of `refl`; switched off in a file with `--show-implicit`: fails there; no binders: fails at the warnings on `k`; no uses: fails at the binder's hover |
-| The full suite, outside the sandbox, on a clean checkout | 77 unit tests and 15 end-to-end tests pass; the first run, before the second round, found `goal_commands` waiting for six diagnostics and getting eight, which led to decision 3 |
-| `Judgement.lagda.typ` from `system-b-proofs`, on a copy | three warnings, `_m_304` on `ℂ`, `_360 : Set, the type of m` on the `m` of `∀{… m …}`, and `_m_388` on `⊢ᵇ`, each with its hover; their types are the same with implicit arguments, and no constraints are on them |
+| The full suite, outside the sandbox, on a clean checkout | 79 unit tests and 15 end-to-end tests pass at `d238bb7`, 77 at the second round; the first run, before the second round, found `goal_commands` waiting for six diagnostics and getting eight, which led to decision 3 |
+| `Judgement.lagda.typ` from `system-b-proofs`, on a copy | three warnings, `_m_304` on `ℂ`, `_360 : Set, the type of m` on the `m` of `∀{… m …}`, and `_m_388` on `⊢ᵇ`, each with its hover; their types are the same with implicit arguments, and no constraints are on them; the output file lists the three with links, and "Make goal" is offered on `_m_304` (`ℂ`, prefix) and not on `_m_388` (`⊢ᵇ`, an operator applied infix) nor on `_360` |
 | Clippy, rustfmt | no warnings; rustfmt only flags `src/highlight.rs`, unformatted before this work |
 
 #### Goals
